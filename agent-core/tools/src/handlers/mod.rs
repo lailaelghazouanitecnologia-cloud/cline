@@ -1,9 +1,11 @@
+mod act_respond;
 mod apply_patch;
 mod ask_followup;
 mod attempt_completion;
 mod browser;
 mod list_code_definitions;
 mod list_files;
+mod plan_respond;
 mod read_file;
 mod replace_in_file;
 mod search_files;
@@ -11,12 +13,14 @@ mod shell;
 mod web_fetch;
 mod write_file;
 
+pub use act_respond::ActModeRespondHandler;
 pub use apply_patch::ApplyPatchHandler;
 pub use ask_followup::AskFollowupHandler;
 pub use attempt_completion::AttemptCompletionHandler;
 pub use browser::BrowserHandler;
 pub use list_code_definitions::ListCodeDefinitionsHandler;
 pub use list_files::ListFilesHandler;
+pub use plan_respond::PlanModeRespondHandler;
 pub use read_file::ReadFileHandler;
 pub use replace_in_file::{InsertCodeBlockHandler, ReplaceInFileHandler};
 pub use search_files::SearchFilesHandler;
@@ -40,4 +44,6 @@ pub fn register_defaults(registry: &mut ToolRegistry) {
     registry.register(BrowserHandler::new());
     registry.register(AskFollowupHandler);
     registry.register(AttemptCompletionHandler);
+    registry.register(PlanModeRespondHandler::new());
+    registry.register(ActModeRespondHandler::new());
 }

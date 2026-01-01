@@ -4,10 +4,12 @@
 mod agent;
 mod session;
 mod state;
+mod task_state;
 
 pub use agent::*;
 pub use session::*;
 pub use state::*;
+pub use task_state::*;
 
 pub use agent_common::{AgentError, AgentResult};
 pub use agent_config::{Config, ConfigLoader, Feature, Features};

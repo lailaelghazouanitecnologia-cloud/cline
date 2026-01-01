@@ -98,6 +98,10 @@ impl ToolCall {
     pub fn get_value(&self, key: &str) -> Option<Value> {
         self.arguments.get(key).cloned()
     }
+
+    pub fn to_json_value(&self) -> Value {
+        self.arguments.clone()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -107,6 +111,9 @@ pub enum ToolStatus {
     Failure,
     Pending,
     Completion,
+    PlanResponse,
+    Ask,
+    ApprovalRequired,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -115,6 +122,8 @@ pub struct ToolOutput {
     pub status: ToolStatus,
     pub content: String,
     pub duration_ms: u64,
+    pub options: Vec<String>,
+    pub metadata: Option<serde_json::Value>,
 }
 
 impl ToolOutput {
@@ -124,6 +133,8 @@ impl ToolOutput {
             status,
             content: content.into(),
             duration_ms: 0,
+            options: Vec::new(),
+            metadata: None,
         }
     }
 
@@ -143,6 +154,22 @@ impl ToolOutput {
         Self::new(ToolStatus::Completion, content)
     }
 
+    pub fn plan_response(content: impl Into<String>, options: Vec<String>) -> Self {
+        let mut output = Self::new(ToolStatus::PlanResponse, content);
+        output.options = options;
+        output
+    }
+
+    pub fn ask(content: impl Into<String>) -> Self {
+        Self::new(ToolStatus::Ask, content)
+    }
+
+    pub fn approval_required(content: impl Into<String>, tool_name: impl Into<String>) -> Self {
+        let mut output = Self::new(ToolStatus::ApprovalRequired, content);
+        output.metadata = Some(serde_json::json!({ "tool_name": tool_name.into() }));
+        output
+    }
+
     pub fn with_call_id(mut self, call_id: impl Into<String>) -> Self {
         self.call_id = call_id.into();
         self
@@ -150,6 +177,16 @@ impl ToolOutput {
 
     pub fn with_duration(mut self, duration_ms: u64) -> Self {
         self.duration_ms = duration_ms;
+        self
+    }
+
+    pub fn with_options(mut self, options: Vec<String>) -> Self {
+        self.options = options;
+        self
+    }
+
+    pub fn with_metadata(mut self, metadata: serde_json::Value) -> Self {
+        self.metadata = Some(metadata);
         self
     }
 
@@ -163,5 +200,12 @@ impl ToolOutput {
 
     pub fn is_pending(&self) -> bool {
         self.status == ToolStatus::Pending
+    }
+
+    pub fn requires_response(&self) -> bool {
+        matches!(
+            self.status,
+            ToolStatus::Ask | ToolStatus::PlanResponse | ToolStatus::ApprovalRequired
+        )
     }
 }
