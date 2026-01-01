@@ -250,3 +250,94 @@ impl Default for Compactor {
         Self::new(CompactionConfig::default())
     }
 }
+
+pub struct AutoCompactor {
+    compactor: Compactor,
+    max_tokens: usize,
+    trigger_threshold: f32,
+    last_trigger_index: Option<usize>,
+    enabled: bool,
+}
+
+impl AutoCompactor {
+    pub fn new(max_tokens: usize) -> Self {
+        Self {
+            compactor: Compactor::default(),
+            max_tokens,
+            trigger_threshold: 0.85,
+            last_trigger_index: None,
+            enabled: true,
+        }
+    }
+
+    pub fn with_threshold(mut self, threshold: f32) -> Self {
+        self.trigger_threshold = threshold.clamp(0.5, 0.95);
+        self
+    }
+
+    pub fn with_config(mut self, config: CompactionConfig) -> Self {
+        self.compactor = Compactor::new(config);
+        self
+    }
+
+    pub fn enable(&mut self) {
+        self.enabled = true;
+    }
+
+    pub fn disable(&mut self) {
+        self.enabled = false;
+    }
+
+    pub fn should_trigger(&self, window: &ContextWindow) -> bool {
+        if !self.enabled {
+            return false;
+        }
+
+        let current = window.total_tokens();
+        let threshold = (self.max_tokens as f32 * self.trigger_threshold) as usize;
+
+        current >= threshold
+    }
+
+    pub fn maybe_compact(&mut self, window: &mut ContextWindow) -> Option<CompactionResult> {
+        if !self.should_trigger(window) {
+            return None;
+        }
+
+        let message_count = window.message_count();
+        self.last_trigger_index = Some(message_count);
+
+        Some(self.compactor.compact(window))
+    }
+
+    pub fn force_compact(&mut self, window: &mut ContextWindow) -> CompactionResult {
+        let message_count = window.message_count();
+        self.last_trigger_index = Some(message_count);
+        self.compactor.compact(window)
+    }
+
+    pub fn last_trigger_index(&self) -> Option<usize> {
+        self.last_trigger_index
+    }
+
+    pub fn tokens_until_trigger(&self, window: &ContextWindow) -> usize {
+        let threshold = (self.max_tokens as f32 * self.trigger_threshold) as usize;
+        let current = window.total_tokens();
+
+        if current >= threshold {
+            0
+        } else {
+            threshold - current
+        }
+    }
+
+    pub fn usage_percentage(&self, window: &ContextWindow) -> f32 {
+        (window.total_tokens() as f32 / self.max_tokens as f32) * 100.0
+    }
+}
+
+impl Default for AutoCompactor {
+    fn default() -> Self {
+        Self::new(100_000)
+    }
+}
