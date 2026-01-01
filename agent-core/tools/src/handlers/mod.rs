@@ -1,6 +1,7 @@
 mod apply_patch;
 mod ask_followup;
 mod attempt_completion;
+mod browser;
 mod list_code_definitions;
 mod list_files;
 mod read_file;
@@ -13,6 +14,7 @@ mod write_file;
 pub use apply_patch::ApplyPatchHandler;
 pub use ask_followup::AskFollowupHandler;
 pub use attempt_completion::AttemptCompletionHandler;
+pub use browser::BrowserHandler;
 pub use list_code_definitions::ListCodeDefinitionsHandler;
 pub use list_files::ListFilesHandler;
 pub use read_file::ReadFileHandler;
@@ -35,6 +37,7 @@ pub fn register_defaults(registry: &mut ToolRegistry) {
     registry.register(ListFilesHandler);
     registry.register(ListCodeDefinitionsHandler);
     registry.register(WebFetchHandler::new());
+    registry.register(BrowserHandler::new());
     registry.register(AskFollowupHandler);
     registry.register(AttemptCompletionHandler);
 }
