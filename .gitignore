@@ -1,41 +1,34 @@
-out
-dist
-dist-standalone
-node_modules
-tmp
-.vscode-test/
-*.vsix
+# Rust
+/target
+agent-core/target
+Cargo.lock
 
+# Legacy project
+legacy/node_modules
+legacy/out
+legacy/dist
+legacy/dist-standalone
+legacy/.vscode-test/
+legacy/*.vsix
+legacy/coverage
+legacy/coverage-unit
+legacy/.nyc_output
+legacy/test-results
+legacy/src/generated/
+legacy/src/shared/proto/
+legacy/webview-ui/src/services/grpc-client.ts
+
+# OS
 .DS_Store
+
+# IDE
 .idea
-.husky/_/
+.vscode
 
-pnpm-lock.yaml
-
-.clineignore
-.venv
-.actrc
-CLAUDE.local.md
-
-webview-ui/src/**/*.js
-webview-ui/src/**/*.js.map
-
-# Ignore coverage directories and files
-coverage
-coverage-unit
-.nyc_output
-# But don't ignore the coverage scripts in .github/scripts/
-!.github/scripts/coverage/
-
-*evals.env
+# Environment
 .env
+*.env
+.venv
 
-.worktrees
-
-## Generated files ##
-src/generated/
-src/shared/proto/
-webview-ui/src/services/grpc-client.ts
-
-# E2E Tests
-test-results
+# Misc
+tmp
