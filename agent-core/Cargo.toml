@@ -6,6 +6,9 @@ members = [
     "tools",
     "exec",
     "core",
+    "client",
+    "mcp",
+    "sandbox",
 ]
 resolver = "2"
 
@@ -21,6 +24,9 @@ agent-config = { path = "config" }
 agent-tools = { path = "tools" }
 agent-exec = { path = "exec" }
 agent-core = { path = "core" }
+agent-client = { path = "client" }
+agent-mcp = { path = "mcp" }
+agent-sandbox = { path = "sandbox" }
 
 thiserror = "2.0"
 serde = { version = "1.0", features = ["derive"] }
@@ -32,3 +38,8 @@ uuid = { version = "1.11", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 toml = "0.8"
 dirs = "5.0"
+reqwest = { version = "0.12", features = ["json", "stream"] }
+futures = "0.3"
+async-trait = "0.1"
+bytes = "1.9"
+pin-project-lite = "0.2"

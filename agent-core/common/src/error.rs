@@ -29,8 +29,8 @@ pub enum AgentError {
     #[error("approval required: {tool_name}")]
     ApprovalRequired { tool_name: String },
 
-    #[error("operation rejected")]
-    Rejected,
+    #[error("operation rejected: {reason}")]
+    Rejected { reason: String },
 
     #[error("limit exceeded: {limit_name} max={max_value}")]
     LimitExceeded { limit_name: String, max_value: u64 },
@@ -40,6 +40,12 @@ pub enum AgentError {
 
     #[error("api: {message}")]
     Api { message: String },
+
+    #[error("provider: {message}")]
+    Provider { message: String },
+
+    #[error("mcp: {message}")]
+    Mcp { message: String },
 }
 
 impl AgentError {
@@ -79,6 +85,12 @@ impl AgentError {
         }
     }
 
+    pub fn rejected_with_reason(reason: impl Into<String>) -> Self {
+        Self::Rejected {
+            reason: reason.into(),
+        }
+    }
+
     pub fn limit_exceeded(limit_name: impl Into<String>, max_value: u64) -> Self {
         Self::LimitExceeded {
             limit_name: limit_name.into(),
@@ -94,6 +106,18 @@ impl AgentError {
 
     pub fn api(message: impl Into<String>) -> Self {
         Self::Api {
+            message: message.into(),
+        }
+    }
+
+    pub fn provider(message: impl Into<String>) -> Self {
+        Self::Provider {
+            message: message.into(),
+        }
+    }
+
+    pub fn mcp(message: impl Into<String>) -> Self {
+        Self::Mcp {
             message: message.into(),
         }
     }

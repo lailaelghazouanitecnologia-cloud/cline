@@ -1,0 +1,15 @@
+[package]
+name = "agent-sandbox"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+agent-common.workspace = true
+
+thiserror.workspace = true
+serde.workspace = true
+tracing.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+landlock = "0.4"
