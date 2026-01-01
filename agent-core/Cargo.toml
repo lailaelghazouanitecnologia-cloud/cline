@@ -12,6 +12,7 @@ members = [
     "prompts",
     "persist",
     "hooks",
+    "context",
 ]
 resolver = "2"
 
@@ -33,6 +34,7 @@ agent-sandbox = { path = "sandbox" }
 agent-prompts = { path = "prompts" }
 agent-persist = { path = "persist" }
 agent-hooks = { path = "hooks" }
+agent-context = { path = "context" }
 
 thiserror = "2.0"
 serde = { version = "1.0", features = ["derive"] }
