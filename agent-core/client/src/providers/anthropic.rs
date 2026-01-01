@@ -373,6 +373,12 @@ struct AnthropicContentBlock {
     tool_use_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     content: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thinking: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    signature: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    data: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -472,6 +478,9 @@ impl From<ChatMessage> for AnthropicMessage {
                             input: None,
                             tool_use_id: None,
                             content: None,
+                            thinking: None,
+                            signature: None,
+                            data: None,
                         },
                         ContentPart::ToolUse { id, name, input } => AnthropicContentBlock {
                             block_type: "tool_use".to_string(),
@@ -481,6 +490,9 @@ impl From<ChatMessage> for AnthropicMessage {
                             input: Some(input),
                             tool_use_id: None,
                             content: None,
+                            thinking: None,
+                            signature: None,
+                            data: None,
                         },
                         ContentPart::ToolResult { tool_use_id, content } => AnthropicContentBlock {
                             block_type: "tool_result".to_string(),
@@ -490,6 +502,9 @@ impl From<ChatMessage> for AnthropicMessage {
                             input: None,
                             tool_use_id: Some(tool_use_id),
                             content: Some(content),
+                            thinking: None,
+                            signature: None,
+                            data: None,
                         },
                         ContentPart::Image { image_url } => AnthropicContentBlock {
                             block_type: "image".to_string(),
@@ -499,6 +514,33 @@ impl From<ChatMessage> for AnthropicMessage {
                             input: None,
                             tool_use_id: None,
                             content: None,
+                            thinking: None,
+                            signature: None,
+                            data: None,
+                        },
+                        ContentPart::Thinking { thinking, signature } => AnthropicContentBlock {
+                            block_type: "thinking".to_string(),
+                            text: None,
+                            id: None,
+                            name: None,
+                            input: None,
+                            tool_use_id: None,
+                            content: None,
+                            thinking: Some(thinking),
+                            signature,
+                            data: None,
+                        },
+                        ContentPart::RedactedThinking { data } => AnthropicContentBlock {
+                            block_type: "redacted_thinking".to_string(),
+                            text: None,
+                            id: None,
+                            name: None,
+                            input: None,
+                            tool_use_id: None,
+                            content: None,
+                            thinking: None,
+                            signature: None,
+                            data: Some(data),
                         },
                     })
                     .collect();

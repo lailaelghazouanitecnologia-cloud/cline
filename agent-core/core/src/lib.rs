@@ -1,11 +1,13 @@
 #![deny(clippy::all)]
 #![forbid(unsafe_code)]
 
+mod abort;
 mod agent;
 mod session;
 mod state;
 mod task_state;
 
+pub use abort::*;
 pub use agent::*;
 pub use session::*;
 pub use state::*;

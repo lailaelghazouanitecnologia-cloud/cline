@@ -1,6 +1,7 @@
 #![deny(clippy::all)]
 #![forbid(unsafe_code)]
 
+mod approval;
 mod context;
 mod diff_view;
 mod filter;
@@ -11,6 +12,7 @@ mod spec;
 
 pub mod handlers;
 
+pub use approval::*;
 pub use context::*;
 pub use diff_view::*;
 pub use filter::*;

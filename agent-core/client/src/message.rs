@@ -32,6 +32,8 @@ pub enum ContentPart {
     Image { image_url: ImageUrl },
     ToolUse { id: String, name: String, input: serde_json::Value },
     ToolResult { tool_use_id: String, content: String },
+    Thinking { thinking: String, signature: Option<String> },
+    RedactedThinking { data: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

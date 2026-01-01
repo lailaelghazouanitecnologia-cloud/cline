@@ -22,6 +22,9 @@ pub enum DeltaType {
     ToolUseStart { id: String, name: String },
     ToolUseInput { input_json: String },
     ToolUseEnd,
+    ThinkingDelta { thinking: String },
+    ThinkingSignature { signature: String },
+    ThinkingEnd,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -64,12 +67,17 @@ pub struct ContentBlockBuffer {
     pub tool_id: Option<String>,
     pub tool_name: Option<String>,
     pub tool_input: String,
+    pub thinking_content: String,
+    pub thinking_signature: Option<String>,
+    pub redacted_data: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ContentBlockType {
     Text,
     ToolUse,
+    Thinking,
+    RedactedThinking,
 }
 
 impl<S> ChatStream<S>
@@ -130,6 +138,15 @@ impl StreamBuffer {
                         self.content_blocks[*index].tool_id = Some(id.clone());
                         self.content_blocks[*index].tool_name = Some(name.clone());
                     }
+                    ContentPart::Thinking { thinking, signature } => {
+                        self.content_blocks[*index] = ContentBlockBuffer::new_thinking();
+                        self.content_blocks[*index].thinking_content = thinking.clone();
+                        self.content_blocks[*index].thinking_signature = signature.clone();
+                    }
+                    ContentPart::RedactedThinking { data } => {
+                        self.content_blocks[*index] =
+                            ContentBlockBuffer::new_redacted_thinking(data.clone());
+                    }
                     _ => {}
                 }
             }
@@ -141,6 +158,15 @@ impl StreamBuffer {
                         }
                         DeltaType::ToolUseInput { input_json } => {
                             self.content_blocks[delta.index].tool_input.push_str(input_json);
+                        }
+                        DeltaType::ThinkingDelta { thinking } => {
+                            self.content_blocks[delta.index]
+                                .thinking_content
+                                .push_str(thinking);
+                        }
+                        DeltaType::ThinkingSignature { signature } => {
+                            self.content_blocks[delta.index].thinking_signature =
+                                Some(signature.clone());
                         }
                         _ => {}
                     }
@@ -181,6 +207,9 @@ impl ContentBlockBuffer {
             tool_id: None,
             tool_name: None,
             tool_input: String::new(),
+            thinking_content: String::new(),
+            thinking_signature: None,
+            redacted_data: None,
         }
     }
 
@@ -191,6 +220,35 @@ impl ContentBlockBuffer {
             tool_id: None,
             tool_name: None,
             tool_input: String::new(),
+            thinking_content: String::new(),
+            thinking_signature: None,
+            redacted_data: None,
+        }
+    }
+
+    pub fn new_thinking() -> Self {
+        Self {
+            content_type: ContentBlockType::Thinking,
+            text: String::new(),
+            tool_id: None,
+            tool_name: None,
+            tool_input: String::new(),
+            thinking_content: String::new(),
+            thinking_signature: None,
+            redacted_data: None,
+        }
+    }
+
+    pub fn new_redacted_thinking(data: String) -> Self {
+        Self {
+            content_type: ContentBlockType::RedactedThinking,
+            text: String::new(),
+            tool_id: None,
+            tool_name: None,
+            tool_input: String::new(),
+            thinking_content: String::new(),
+            thinking_signature: None,
+            redacted_data: Some(data),
         }
     }
 
@@ -198,13 +256,21 @@ impl ContentBlockBuffer {
         match self.content_type {
             ContentBlockType::Text => ContentPart::Text { text: self.text },
             ContentBlockType::ToolUse => {
-                let input = serde_json::from_str(&self.tool_input).unwrap_or(serde_json::Value::Null);
+                let input = serde_json::from_str(&self.tool_input)
+                    .unwrap_or(serde_json::Value::Null);
                 ContentPart::ToolUse {
                     id: self.tool_id.unwrap_or_default(),
                     name: self.tool_name.unwrap_or_default(),
                     input,
                 }
             }
+            ContentBlockType::Thinking => ContentPart::Thinking {
+                thinking: self.thinking_content,
+                signature: self.thinking_signature,
+            },
+            ContentBlockType::RedactedThinking => ContentPart::RedactedThinking {
+                data: self.redacted_data.unwrap_or_default(),
+            },
         }
     }
 }
