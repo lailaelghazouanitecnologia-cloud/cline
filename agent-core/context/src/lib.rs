@@ -2,6 +2,7 @@
 #![forbid(unsafe_code)]
 
 mod compaction;
+mod config;
 mod env_tracker;
 mod file_tracker;
 mod manager;
@@ -14,6 +15,7 @@ mod tracker;
 mod window;
 
 pub use compaction::*;
+pub use config::*;
 pub use env_tracker::*;
 pub use file_tracker::*;
 pub use manager::*;

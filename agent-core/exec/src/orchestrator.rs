@@ -39,7 +39,7 @@ impl Default for FailureAction {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CommandResult {
+pub struct OrchCommandResult {
     pub id: String,
     pub exit_code: Option<i32>,
     pub stdout: String,
@@ -52,14 +52,14 @@ pub struct CommandResult {
 pub enum OrchestratorEvent {
     CommandStarted { id: String },
     CommandOutput { id: String, line: String, is_stderr: bool },
-    CommandCompleted { id: String, result: CommandResult },
+    CommandCompleted { id: String, result: OrchCommandResult },
     CommandFailed { id: String, error: String },
     BatchCompleted { total: usize, succeeded: usize, failed: usize },
 }
 
 pub struct CommandOrchestrator {
     commands: Vec<CommandSpec>,
-    results: Arc<RwLock<HashMap<String, CommandResult>>>,
+    results: Arc<RwLock<HashMap<String, OrchCommandResult>>>,
     event_sender: Option<mpsc::Sender<OrchestratorEvent>>,
     max_parallel: usize,
     default_timeout: Duration,
@@ -221,7 +221,7 @@ impl CommandOrchestrator {
         })
     }
 
-    async fn execute_command(&self, spec: &CommandSpec) -> AgentResult<CommandResult> {
+    async fn execute_command(&self, spec: &CommandSpec) -> AgentResult<OrchCommandResult> {
         let start = std::time::Instant::now();
         let working_dir = spec.working_dir.as_ref().unwrap_or(&self.working_dir);
 
@@ -244,7 +244,7 @@ impl CommandOrchestrator {
 
         let duration_ms = start.elapsed().as_millis() as u64;
 
-        Ok(CommandResult {
+        Ok(OrchCommandResult {
             id: spec.id.clone(),
             exit_code: output.status.code(),
             stdout: String::from_utf8_lossy(&output.stdout).to_string(),
@@ -321,11 +321,11 @@ impl CommandOrchestrator {
         self.commands.clear();
     }
 
-    pub async fn get_results(&self) -> HashMap<String, CommandResult> {
+    pub async fn get_results(&self) -> HashMap<String, OrchCommandResult> {
         self.results.read().await.clone()
     }
 
-    pub async fn get_result(&self, id: &str) -> Option<CommandResult> {
+    pub async fn get_result(&self, id: &str) -> Option<OrchCommandResult> {
         self.results.read().await.get(id).cloned()
     }
 }
@@ -341,7 +341,7 @@ pub struct BatchResult {
     pub total: usize,
     pub succeeded: usize,
     pub failed: usize,
-    pub results: HashMap<String, CommandResult>,
+    pub results: HashMap<String, OrchCommandResult>,
 }
 
 impl BatchResult {

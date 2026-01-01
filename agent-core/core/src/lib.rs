@@ -4,6 +4,7 @@
 mod abort;
 mod agent;
 mod persistence;
+mod resume;
 mod session;
 mod state;
 mod task_state;
@@ -11,6 +12,7 @@ mod task_state;
 pub use abort::*;
 pub use agent::*;
 pub use persistence::*;
+pub use resume::*;
 pub use session::*;
 pub use state::*;
 pub use task_state::*;
