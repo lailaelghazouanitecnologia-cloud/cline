@@ -1,0 +1,10 @@
+pub const CHANNEL_CAPACITY: usize = 256;
+pub const MAX_MESSAGE_SIZE_BYTES: usize = 1024 * 1024;
+pub const MAX_TOOL_OUTPUT_SIZE_BYTES: usize = 512 * 1024;
+pub const DEFAULT_TIMEOUT_MS: u64 = 120_000;
+pub const MAX_TIMEOUT_MS: u64 = 600_000;
+pub const MAX_RETRY_COUNT: u32 = 3;
+pub const MAX_CONTEXT_TOKENS: u32 = 200_000;
+pub const MAX_OUTPUT_TOKENS: u32 = 16_000;
+pub const MAX_TURNS_PER_SESSION: u32 = 1000;
+pub const MAX_TOOLS_PER_TURN: u32 = 50;
