@@ -3,6 +3,7 @@ mod apply_patch;
 mod ask_followup;
 mod attempt_completion;
 mod browser;
+mod condense;
 mod list_code_definitions;
 mod list_files;
 mod mcp_tool;
@@ -20,6 +21,7 @@ pub use apply_patch::ApplyPatchHandler;
 pub use ask_followup::AskFollowupHandler;
 pub use attempt_completion::AttemptCompletionHandler;
 pub use browser::BrowserHandler;
+pub use condense::{CondenseHandler, NewTaskHandler, SummarizeTaskHandler};
 pub use list_code_definitions::ListCodeDefinitionsHandler;
 pub use list_files::ListFilesHandler;
 pub use mcp_tool::{AccessMcpResourceHandler, ListMcpToolsHandler, UseMcpToolHandler};
@@ -51,4 +53,7 @@ pub fn register_defaults(registry: &mut ToolRegistry) {
     registry.register(AttemptCompletionHandler);
     registry.register(PlanModeRespondHandler::new());
     registry.register(ActModeRespondHandler::new());
+    registry.register(CondenseHandler::new());
+    registry.register(NewTaskHandler::new());
+    registry.register(SummarizeTaskHandler::new());
 }
