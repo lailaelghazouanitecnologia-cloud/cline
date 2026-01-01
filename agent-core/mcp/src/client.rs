@@ -8,8 +8,7 @@ use crate::types::{
     ToolCallRequest, ToolCallResponse,
 };
 use agent_common::{AgentError, AgentResult};
-use async_trait::async_trait;
-use serde::{de::DeserializeOwned, Serialize};
+use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;

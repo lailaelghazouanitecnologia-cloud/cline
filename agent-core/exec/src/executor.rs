@@ -96,7 +96,7 @@ impl Executor {
     }
 
     async fn send_tool_call_completed(&self, call: &ToolCall, output: &ToolOutput) -> AgentResult<()> {
-        let result = if output.success {
+        let result = if output.is_success() {
             ToolResult::success(&output.content)
         } else {
             ToolResult::failure(&output.content)

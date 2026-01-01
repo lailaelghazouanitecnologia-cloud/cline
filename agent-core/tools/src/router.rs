@@ -28,11 +28,12 @@ impl ToolRouter {
         let duration_ms = start.elapsed().as_millis() as u64;
 
         match result {
-            Ok(mut output) => {
-                output.duration_ms = duration_ms;
-                Ok(output)
+            Ok(output) => {
+                Ok(output.with_call_id(call_id).with_duration(duration_ms))
             }
-            Err(error) => Ok(ToolOutput::failure(call_id, error.to_string(), duration_ms)),
+            Err(error) => Ok(ToolOutput::failure(error.to_string())
+                .with_call_id(call_id)
+                .with_duration(duration_ms)),
         }
     }
 

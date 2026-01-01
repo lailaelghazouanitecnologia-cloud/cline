@@ -2,14 +2,13 @@
 #![forbid(unsafe_code)]
 
 use crate::message::{
-    ChatMessage, ChatRequest, ChatResponse, ContentPart, FinishReason, MessageContent, Role,
-    ToolDefinition, Usage,
+    ChatMessage, ChatRequest, ChatResponse, ContentPart, FinishReason, MessageContent, Role, Usage,
 };
 use crate::provider::{ChatStreamBox, ModelProvider};
 use crate::stream::{DeltaType, StreamDelta, StreamEvent, StreamEventType};
 use agent_common::{AgentError, AgentResult};
 use async_trait::async_trait;
-use futures::stream::{self, StreamExt};
+use futures::stream::StreamExt;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 

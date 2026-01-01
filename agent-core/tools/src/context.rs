@@ -2,6 +2,7 @@ use agent_config::Config;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+#[derive(Clone)]
 pub struct ToolContext {
     config: Arc<Config>,
     working_directory: PathBuf,

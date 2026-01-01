@@ -35,6 +35,29 @@ impl ToolSpec {
         self.parameters.required = required;
         self
     }
+
+    pub fn with_parameter(
+        mut self,
+        name: &str,
+        param_type: &str,
+        description: &str,
+        required: bool,
+    ) -> Self {
+        let prop = serde_json::json!({
+            "type": param_type,
+            "description": description
+        });
+
+        if let Value::Object(ref mut map) = self.parameters.properties {
+            map.insert(name.to_string(), prop);
+        }
+
+        if required {
+            self.parameters.required.push(name.to_string());
+        }
+
+        self
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -71,32 +94,74 @@ impl ToolCall {
     pub fn get_bool(&self, key: &str) -> Option<bool> {
         self.arguments.get(key).and_then(|v| v.as_bool())
     }
+
+    pub fn get_value(&self, key: &str) -> Option<Value> {
+        self.arguments.get(key).cloned()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolStatus {
+    Success,
+    Failure,
+    Pending,
+    Completion,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolOutput {
     pub call_id: String,
-    pub success: bool,
+    pub status: ToolStatus,
     pub content: String,
     pub duration_ms: u64,
 }
 
 impl ToolOutput {
-    pub fn success(call_id: impl Into<String>, content: impl Into<String>, duration_ms: u64) -> Self {
+    pub fn new(status: ToolStatus, content: impl Into<String>) -> Self {
         Self {
-            call_id: call_id.into(),
-            success: true,
+            call_id: String::new(),
+            status,
             content: content.into(),
-            duration_ms,
+            duration_ms: 0,
         }
     }
 
-    pub fn failure(call_id: impl Into<String>, content: impl Into<String>, duration_ms: u64) -> Self {
-        Self {
-            call_id: call_id.into(),
-            success: false,
-            content: content.into(),
-            duration_ms,
-        }
+    pub fn success(content: impl Into<String>) -> Self {
+        Self::new(ToolStatus::Success, content)
+    }
+
+    pub fn failure(content: impl Into<String>) -> Self {
+        Self::new(ToolStatus::Failure, content)
+    }
+
+    pub fn pending(content: impl Into<String>) -> Self {
+        Self::new(ToolStatus::Pending, content)
+    }
+
+    pub fn completion(content: impl Into<String>) -> Self {
+        Self::new(ToolStatus::Completion, content)
+    }
+
+    pub fn with_call_id(mut self, call_id: impl Into<String>) -> Self {
+        self.call_id = call_id.into();
+        self
+    }
+
+    pub fn with_duration(mut self, duration_ms: u64) -> Self {
+        self.duration_ms = duration_ms;
+        self
+    }
+
+    pub fn is_success(&self) -> bool {
+        self.status == ToolStatus::Success
+    }
+
+    pub fn is_completion(&self) -> bool {
+        self.status == ToolStatus::Completion
+    }
+
+    pub fn is_pending(&self) -> bool {
+        self.status == ToolStatus::Pending
     }
 }
