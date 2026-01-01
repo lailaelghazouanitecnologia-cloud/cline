@@ -5,6 +5,47 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelVariant {
+    Default,
+    Planning,
+    Coding,
+    Reviewing,
+    Debugging,
+    Explaining,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentMode {
+    Act,
+    Plan,
+    Architect,
+    Ask,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelCapabilities {
+    pub supports_images: bool,
+    pub supports_computer_use: bool,
+    pub max_tokens: usize,
+    pub supports_streaming: bool,
+    pub context_window: usize,
+}
+
+impl Default for ModelCapabilities {
+    fn default() -> Self {
+        Self {
+            supports_images: true,
+            supports_computer_use: true,
+            max_tokens: 8192,
+            supports_streaming: true,
+            context_window: 200000,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SystemPromptConfig {
     pub persona: String,
@@ -13,6 +54,8 @@ pub struct SystemPromptConfig {
     pub tools_section: Option<String>,
     pub context_section: Option<String>,
     pub rules_section: Option<String>,
+    pub variant: ModelVariant,
+    pub mode: AgentMode,
 }
 
 impl Default for SystemPromptConfig {
@@ -33,6 +76,8 @@ impl Default for SystemPromptConfig {
             tools_section: None,
             context_section: None,
             rules_section: None,
+            variant: ModelVariant::Default,
+            mode: AgentMode::Act,
         }
     }
 }
@@ -128,6 +173,87 @@ impl SystemPromptBuilder {
 
     pub fn project_rules(mut self, rules: &str) -> Self {
         self.config.rules_section = Some(rules.to_string());
+        self
+    }
+
+    pub fn variant(mut self, variant: ModelVariant) -> Self {
+        self.config.variant = variant;
+        self.apply_variant_defaults()
+    }
+
+    pub fn mode(mut self, mode: AgentMode) -> Self {
+        self.config.mode = mode;
+        self.apply_mode_defaults()
+    }
+
+    fn apply_variant_defaults(mut self) -> Self {
+        match self.config.variant {
+            ModelVariant::Planning => {
+                self.config.persona = "You are a software architect and planner.".to_string();
+                self.config.constraints.push(
+                    "Focus on high-level design and break down complex tasks".to_string()
+                );
+            }
+            ModelVariant::Coding => {
+                self.config.persona = "You are an expert programmer.".to_string();
+                self.config.constraints.push(
+                    "Write clean, efficient, and well-tested code".to_string()
+                );
+            }
+            ModelVariant::Reviewing => {
+                self.config.persona = "You are a code reviewer.".to_string();
+                self.config.constraints.push(
+                    "Identify bugs, security issues, and improvement opportunities".to_string()
+                );
+            }
+            ModelVariant::Debugging => {
+                self.config.persona = "You are a debugging specialist.".to_string();
+                self.config.constraints.push(
+                    "Systematically identify root causes and provide fixes".to_string()
+                );
+            }
+            ModelVariant::Explaining => {
+                self.config.persona = "You are a technical educator.".to_string();
+                self.config.constraints.push(
+                    "Explain concepts clearly with examples".to_string()
+                );
+            }
+            ModelVariant::Default => {}
+        }
+        self
+    }
+
+    fn apply_mode_defaults(mut self) -> Self {
+        match self.config.mode {
+            AgentMode::Act => {
+                self.sections.push(PromptSection {
+                    title: Some("Mode".to_string()),
+                    content: "You are in ACT mode. Execute tasks directly using available tools.".to_string(),
+                    priority: 100,
+                });
+            }
+            AgentMode::Plan => {
+                self.sections.push(PromptSection {
+                    title: Some("Mode".to_string()),
+                    content: "You are in PLAN mode. Create detailed implementation plans before acting.".to_string(),
+                    priority: 100,
+                });
+            }
+            AgentMode::Architect => {
+                self.sections.push(PromptSection {
+                    title: Some("Mode".to_string()),
+                    content: "You are in ARCHITECT mode. Focus on system design and architecture.".to_string(),
+                    priority: 100,
+                });
+            }
+            AgentMode::Ask => {
+                self.sections.push(PromptSection {
+                    title: Some("Mode".to_string()),
+                    content: "You are in ASK mode. Answer questions and provide information.".to_string(),
+                    priority: 100,
+                });
+            }
+        }
         self
     }
 
@@ -381,4 +507,197 @@ pub fn detect_language(path: &Path) -> Option<String> {
         _ => return None,
     };
     Some(lang.to_string())
+}
+
+pub struct PromptPresets;
+
+impl PromptPresets {
+    pub fn coding_assistant() -> SystemPromptBuilder {
+        SystemPromptBuilder::new()
+            .variant(ModelVariant::Coding)
+            .mode(AgentMode::Act)
+            .add_constraint("Use idiomatic patterns for the target language")
+            .add_constraint("Prioritize readability and maintainability")
+    }
+
+    pub fn code_reviewer() -> SystemPromptBuilder {
+        SystemPromptBuilder::new()
+            .variant(ModelVariant::Reviewing)
+            .mode(AgentMode::Ask)
+            .add_capability("Analyze code for bugs and security issues")
+            .add_capability("Suggest performance improvements")
+            .add_constraint("Be constructive and specific in feedback")
+    }
+
+    pub fn architect() -> SystemPromptBuilder {
+        SystemPromptBuilder::new()
+            .variant(ModelVariant::Planning)
+            .mode(AgentMode::Architect)
+            .add_capability("Design system architectures")
+            .add_capability("Create implementation roadmaps")
+            .add_constraint("Consider scalability and maintainability")
+    }
+
+    pub fn debugger() -> SystemPromptBuilder {
+        SystemPromptBuilder::new()
+            .variant(ModelVariant::Debugging)
+            .mode(AgentMode::Act)
+            .add_capability("Analyze error messages and stack traces")
+            .add_capability("Identify root causes systematically")
+            .add_constraint("Verify fixes before suggesting them")
+    }
+
+    pub fn teacher() -> SystemPromptBuilder {
+        SystemPromptBuilder::new()
+            .variant(ModelVariant::Explaining)
+            .mode(AgentMode::Ask)
+            .add_capability("Explain complex concepts simply")
+            .add_capability("Provide practical examples")
+            .add_constraint("Adjust explanations to user's level")
+    }
+
+    pub fn task_executor() -> SystemPromptBuilder {
+        SystemPromptBuilder::new()
+            .variant(ModelVariant::Default)
+            .mode(AgentMode::Act)
+            .add_constraint("Complete tasks efficiently")
+            .add_constraint("Ask for clarification only when necessary")
+    }
+
+    pub fn planner() -> SystemPromptBuilder {
+        SystemPromptBuilder::new()
+            .variant(ModelVariant::Planning)
+            .mode(AgentMode::Plan)
+            .add_capability("Break down complex tasks into steps")
+            .add_capability("Identify dependencies and risks")
+            .add_constraint("Create actionable implementation plans")
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PromptTemplate {
+    pub name: String,
+    pub description: String,
+    pub template: String,
+    pub variables: Vec<String>,
+}
+
+impl PromptTemplate {
+    pub fn new(name: impl Into<String>, template: impl Into<String>) -> Self {
+        let template_str = template.into();
+        let variables = Self::extract_variables(&template_str);
+        Self {
+            name: name.into(),
+            description: String::new(),
+            template: template_str,
+            variables,
+        }
+    }
+
+    pub fn with_description(mut self, desc: impl Into<String>) -> Self {
+        self.description = desc.into();
+        self
+    }
+
+    fn extract_variables(template: &str) -> Vec<String> {
+        let mut vars = Vec::new();
+        let mut chars = template.chars().peekable();
+
+        while let Some(c) = chars.next() {
+            if c == '{' {
+                if let Some(&'{') = chars.peek() {
+                    chars.next();
+                    let mut var_name = String::new();
+                    while let Some(&nc) = chars.peek() {
+                        if nc == '}' {
+                            chars.next();
+                            if let Some(&'}') = chars.peek() {
+                                chars.next();
+                                if !var_name.is_empty() && !vars.contains(&var_name) {
+                                    vars.push(var_name);
+                                }
+                            }
+                            break;
+                        }
+                        var_name.push(nc);
+                        chars.next();
+                    }
+                }
+            }
+        }
+
+        vars
+    }
+
+    pub fn render(&self, values: &HashMap<String, String>) -> String {
+        let mut result = self.template.clone();
+        for (key, value) in values {
+            result = result.replace(&format!("{{{{{}}}}}", key), value);
+        }
+        result
+    }
+}
+
+pub struct TemplateRegistry {
+    templates: HashMap<String, PromptTemplate>,
+}
+
+impl TemplateRegistry {
+    pub fn new() -> Self {
+        Self {
+            templates: HashMap::new(),
+        }
+    }
+
+    pub fn register(&mut self, template: PromptTemplate) {
+        self.templates.insert(template.name.clone(), template);
+    }
+
+    pub fn get(&self, name: &str) -> Option<&PromptTemplate> {
+        self.templates.get(name)
+    }
+
+    pub fn render(&self, name: &str, values: &HashMap<String, String>) -> Option<String> {
+        self.templates.get(name).map(|t| t.render(values))
+    }
+
+    pub fn list(&self) -> Vec<&str> {
+        self.templates.keys().map(|s| s.as_str()).collect()
+    }
+}
+
+impl Default for TemplateRegistry {
+    fn default() -> Self {
+        let mut registry = Self::new();
+
+        registry.register(
+            PromptTemplate::new(
+                "file_edit",
+                "Edit the file at {{path}}:\n\n{{instructions}}"
+            ).with_description("Template for file editing tasks")
+        );
+
+        registry.register(
+            PromptTemplate::new(
+                "code_review",
+                "Review the following code for {{focus}}:\n\n```{{language}}\n{{code}}\n```"
+            ).with_description("Template for code review requests")
+        );
+
+        registry.register(
+            PromptTemplate::new(
+                "bug_fix",
+                "Fix the bug in {{file}}:\n\nError: {{error}}\n\nContext: {{context}}"
+            ).with_description("Template for bug fixing tasks")
+        );
+
+        registry.register(
+            PromptTemplate::new(
+                "feature_request",
+                "Implement the following feature:\n\n{{description}}\n\nRequirements:\n{{requirements}}"
+            ).with_description("Template for feature implementation")
+        );
+
+        registry
+    }
 }
