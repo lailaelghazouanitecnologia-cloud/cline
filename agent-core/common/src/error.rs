@@ -46,6 +46,12 @@ pub enum AgentError {
 
     #[error("mcp: {message}")]
     Mcp { message: String },
+
+    #[error("internal: {message}")]
+    Internal { message: String },
+
+    #[error("validation: {message}")]
+    Validation { message: String },
 }
 
 impl AgentError {
@@ -134,6 +140,18 @@ impl AgentError {
 
     pub fn config(message: impl Into<String>) -> Self {
         Self::Configuration {
+            message: message.into(),
+        }
+    }
+
+    pub fn internal(message: impl Into<String>) -> Self {
+        Self::Internal {
+            message: message.into(),
+        }
+    }
+
+    pub fn validation(message: impl Into<String>) -> Self {
+        Self::Validation {
             message: message.into(),
         }
     }

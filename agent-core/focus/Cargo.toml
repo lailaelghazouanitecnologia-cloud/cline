@@ -1,0 +1,11 @@
+[package]
+name = "agent-focus"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+agent-common = { path = "../common" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1.42", features = ["fs", "sync"] }
+notify = "8.0"
