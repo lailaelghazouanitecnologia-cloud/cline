@@ -9,6 +9,9 @@ members = [
     "client",
     "mcp",
     "sandbox",
+    "prompts",
+    "persist",
+    "hooks",
 ]
 resolver = "2"
 
@@ -27,6 +30,9 @@ agent-core = { path = "core" }
 agent-client = { path = "client" }
 agent-mcp = { path = "mcp" }
 agent-sandbox = { path = "sandbox" }
+agent-prompts = { path = "prompts" }
+agent-persist = { path = "persist" }
+agent-hooks = { path = "hooks" }
 
 thiserror = "2.0"
 serde = { version = "1.0", features = ["derive"] }

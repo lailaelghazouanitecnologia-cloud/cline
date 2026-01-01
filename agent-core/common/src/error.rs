@@ -121,4 +121,20 @@ impl AgentError {
             message: message.into(),
         }
     }
+
+    pub fn deserialization(message: impl Into<String>) -> Self {
+        Self::Serialization {
+            message: format!("deserialization: {}", message.into()),
+        }
+    }
+
+    pub fn io(_operation: impl Into<String>, error: std::io::Error) -> Self {
+        Self::Io { source: error }
+    }
+
+    pub fn config(message: impl Into<String>) -> Self {
+        Self::Configuration {
+            message: message.into(),
+        }
+    }
 }
