@@ -16,3 +16,4 @@ tokio.workspace = true
 async-channel.workspace = true
 tracing.workspace = true
 dirs.workspace = true
+async-trait = "0.1"

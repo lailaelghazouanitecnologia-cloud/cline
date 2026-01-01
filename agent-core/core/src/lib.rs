@@ -3,16 +3,20 @@
 
 mod abort;
 mod agent;
+mod loop_handler;
 mod persistence;
 mod resume;
+mod runner;
 mod session;
 mod state;
 mod task_state;
 
 pub use abort::*;
 pub use agent::*;
+pub use loop_handler::*;
 pub use persistence::*;
 pub use resume::*;
+pub use runner::*;
 pub use session::*;
 pub use state::*;
 pub use task_state::*;
