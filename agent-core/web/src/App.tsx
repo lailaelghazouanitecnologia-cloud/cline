@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { ChatArea } from './components/ChatArea';
 import { useWebSocket } from './hooks/useWebSocket';
@@ -10,6 +10,13 @@ function generateId(): string {
 
 const WS_URL = `ws://${window.location.hostname}:3001/ws`;
 
+interface StoredSession {
+  id: string;
+  title: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export function App() {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
@@ -20,6 +27,39 @@ export function App() {
   const activeSession = sessions.find(s => s.id === activeSessionId) || null;
 
   const handleMessage = useCallback((event: { type: string; data: unknown }) => {
+    if (event.type === 'sessions') {
+      const storedSessions = event.data as StoredSession[];
+      setSessions(prev => {
+        const existingIds = new Set(prev.map(s => s.id));
+        const newSessions = storedSessions
+          .filter(s => !existingIds.has(s.id))
+          .map(s => ({
+            id: s.id,
+            title: s.title,
+            createdAt: new Date(s.created_at),
+            messages: [],
+          }));
+        return [...prev, ...newSessions];
+      });
+      return;
+    }
+
+    if (event.type === 'session_created') {
+      const data = event.data as { id: string; title: string };
+      activeSessionRef.current = data.id;
+      setSessions(prev => {
+        if (prev.some(s => s.id === data.id)) return prev;
+        return [{
+          id: data.id,
+          title: data.title,
+          createdAt: new Date(),
+          messages: [],
+        }, ...prev];
+      });
+      setActiveSessionId(data.id);
+      return;
+    }
+
     const sessionId = activeSessionRef.current;
     if (!sessionId) return;
 
@@ -119,30 +159,39 @@ export function App() {
   });
 
   const createSession = useCallback((initialTask?: string) => {
-    const session: Session = {
-      id: generateId(),
-      title: initialTask?.slice(0, 50) || 'New Task',
-      createdAt: new Date(),
-      messages: [],
-    };
-    setSessions(prev => [session, ...prev]);
-    setActiveSessionId(session.id);
-    activeSessionRef.current = session.id;
-
-    if (initialTask) {
-      const userMessage: Message = {
+    if (!initialTask) {
+      const session: Session = {
         id: generateId(),
-        role: 'user',
-        content: initialTask,
-        timestamp: new Date(),
+        title: 'New Task',
+        createdAt: new Date(),
+        messages: [],
       };
-      setSessions(prev => prev.map(s => {
-        if (s.id !== session.id) return s;
-        return { ...s, messages: [userMessage] };
-      }));
-      setIsLoading(true);
-      send('chat', { message: initialTask });
+      setSessions(prev => [session, ...prev]);
+      setActiveSessionId(session.id);
+      activeSessionRef.current = session.id;
+      return;
     }
+
+    const tempId = generateId();
+    activeSessionRef.current = tempId;
+
+    const userMessage: Message = {
+      id: generateId(),
+      role: 'user',
+      content: initialTask,
+      timestamp: new Date(),
+    };
+
+    setSessions(prev => [{
+      id: tempId,
+      title: initialTask.slice(0, 50),
+      createdAt: new Date(),
+      messages: [userMessage],
+    }, ...prev]);
+
+    setActiveSessionId(tempId);
+    setIsLoading(true);
+    send('chat', { message: initialTask });
   }, [send]);
 
   const sendMessage = useCallback((sessionId: string, content: string) => {
@@ -161,7 +210,7 @@ export function App() {
     }));
 
     setIsLoading(true);
-    send('chat', { message: content });
+    send('chat', { message: content, sessionId });
   }, [send]);
 
   const handleSendMessage = useCallback((content: string) => {

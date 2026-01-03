@@ -5,6 +5,7 @@ mod approval;
 mod cli;
 mod repl;
 mod server;
+mod store;
 mod tool_bridge;
 
 use clap::Parser;
