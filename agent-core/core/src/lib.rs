@@ -3,6 +3,7 @@
 
 mod abort;
 mod agent;
+mod coordinator;
 mod loop_handler;
 mod persistence;
 mod resume;
@@ -13,6 +14,7 @@ mod task_state;
 
 pub use abort::*;
 pub use agent::*;
+pub use coordinator::*;
 pub use loop_handler::*;
 pub use persistence::*;
 pub use resume::*;
