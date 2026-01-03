@@ -16,6 +16,7 @@ members = [
     "mode",
     "focus",
     "checkpoint",
+    "cli",
 ]
 resolver = "2"
 

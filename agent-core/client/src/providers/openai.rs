@@ -2,7 +2,8 @@
 #![forbid(unsafe_code)]
 
 use crate::message::{
-    ChatMessage, ChatRequest, ChatResponse, ContentPart, FinishReason, MessageContent, Role, Usage,
+    ChatMessage, ChatRequest, ChatResponse, ContentPart, FinishReason, MessageContent, Role,
+    Usage,
 };
 use crate::provider::{ChatStreamBox, ModelProvider};
 use crate::stream::{DeltaType, StreamDelta, StreamEvent, StreamEventType};
@@ -346,6 +347,60 @@ impl From<ChatMessage> for OpenAiMessage {
             Role::Assistant => "assistant",
             Role::Tool => "tool",
         };
+
+        if message.role == Role::Tool {
+            if let Some(parts) = message.content.as_parts() {
+                for part in parts {
+                    if let ContentPart::ToolResult { tool_use_id, content } = part {
+                        return Self {
+                            role: "tool".to_string(),
+                            content: Some(content.clone()),
+                            tool_calls: None,
+                            tool_call_id: Some(tool_use_id.clone()),
+                        };
+                    }
+                }
+            }
+        }
+
+        if message.role == Role::Assistant {
+            if let Some(parts) = message.content.as_parts() {
+                let tool_calls: Vec<OpenAiToolCall> = parts
+                    .iter()
+                    .filter_map(|part| {
+                        if let ContentPart::ToolUse { id, name, input } = part {
+                            Some(OpenAiToolCall {
+                                id: id.clone(),
+                                call_type: "function".to_string(),
+                                function: OpenAiToolCallFunction {
+                                    name: name.clone(),
+                                    arguments: serde_json::to_string(input).unwrap_or_default(),
+                                },
+                            })
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+
+                if !tool_calls.is_empty() {
+                    let text_content = parts.iter().find_map(|part| {
+                        if let ContentPart::Text { text } = part {
+                            Some(text.clone())
+                        } else {
+                            None
+                        }
+                    });
+
+                    return Self {
+                        role: "assistant".to_string(),
+                        content: text_content,
+                        tool_calls: Some(tool_calls),
+                        tool_call_id: None,
+                    };
+                }
+            }
+        }
 
         let content = message.content.as_text().map(|s| s.to_string());
 

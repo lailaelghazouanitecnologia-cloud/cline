@@ -108,6 +108,16 @@ impl ChatMessage {
             content: MessageContent::Text(content.into()),
         }
     }
+
+    pub fn tool(tool_use_id: impl Into<String>, content: impl Into<String>) -> Self {
+        Self {
+            role: Role::Tool,
+            content: MessageContent::Parts(vec![ContentPart::ToolResult {
+                tool_use_id: tool_use_id.into(),
+                content: content.into(),
+            }]),
+        }
+    }
 }
 
 impl ChatRequest {
@@ -150,6 +160,13 @@ impl MessageContent {
                     }
                 })
             }
+        }
+    }
+
+    pub fn as_parts(&self) -> Option<&Vec<ContentPart>> {
+        match self {
+            MessageContent::Parts(parts) => Some(parts),
+            MessageContent::Text(_) => None,
         }
     }
 }

@@ -89,9 +89,16 @@ fn default_providers() -> HashMap<String, ProviderConfig> {
 
     providers.insert(
         String::from("openai"),
-        ProviderConfig::new("OpenAI", "https://api.openai.com")
+        ProviderConfig::new("OpenAI", "https://api.openai.com/v1")
             .with_api_key_env("OPENAI_API_KEY")
             .with_default_model("gpt-4o"),
+    );
+
+    providers.insert(
+        String::from("groq"),
+        ProviderConfig::new("Groq", "https://api.groq.com/openai/v1")
+            .with_api_key_env("GROQ_API_KEY")
+            .with_default_model("llama-3.3-70b-versatile"),
     );
 
     providers
