@@ -1,12 +1,14 @@
 #![deny(clippy::all)]
 #![forbid(unsafe_code)]
 
-mod component;
-mod context;
+pub mod components;
+pub mod tools;
+mod registry;
 mod template;
+mod types;
 mod variant;
 
-pub use component::*;
-pub use context::*;
+pub use registry::*;
 pub use template::*;
+pub use types::*;
 pub use variant::*;
