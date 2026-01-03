@@ -130,7 +130,7 @@ pub enum PromptSection {
     ToolUse,
     EditingFiles,
     Objective,
-    ActVsPlan,
+    ActVsPlanMode,
     Mcp,
     UserInstructions,
     Feedback,
@@ -148,10 +148,12 @@ impl PromptSection {
             Self::ToolUse,
             Self::EditingFiles,
             Self::Objective,
-            Self::ActVsPlan,
+            Self::ActVsPlanMode,
             Self::Mcp,
             Self::UserInstructions,
             Self::TaskProgress,
+            Self::CliSubagents,
+            Self::Feedback,
         ]
     }
 
@@ -159,6 +161,8 @@ impl PromptSection {
         vec![
             Self::AgentRole,
             Self::SystemInfo,
+            Self::ActVsPlanMode,
+            Self::CliSubagents,
             Self::Mcp,
             Self::UserInstructions,
             Self::ToolUse,
@@ -166,8 +170,8 @@ impl PromptSection {
             Self::Capabilities,
             Self::Rules,
             Self::Objective,
-            Self::ActVsPlan,
             Self::TaskProgress,
+            Self::Feedback,
         ]
     }
 
@@ -180,7 +184,7 @@ impl PromptSection {
             Self::ToolUse => "tool_use",
             Self::EditingFiles => "editing_files",
             Self::Objective => "objective",
-            Self::ActVsPlan => "act_vs_plan",
+            Self::ActVsPlanMode => "act_vs_plan_mode",
             Self::Mcp => "mcp",
             Self::UserInstructions => "user_instructions",
             Self::Feedback => "feedback",
@@ -248,6 +252,8 @@ pub struct SystemPromptContext {
     pub is_cli_subagent: bool,
     pub enable_native_tools: bool,
     pub enable_parallel_tools: bool,
+
+    pub focus_chain_enabled: bool,
 
     pub terminal_mode: TerminalMode,
 

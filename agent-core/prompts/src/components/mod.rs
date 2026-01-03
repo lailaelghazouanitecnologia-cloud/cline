@@ -1,9 +1,12 @@
 #![deny(clippy::all)]
 #![forbid(unsafe_code)]
 
+mod act_vs_plan_mode;
 mod agent_role;
 mod capabilities;
+mod cli_subagents;
 mod editing_files;
+mod feedback;
 mod mcp;
 mod objective;
 mod rules;
@@ -12,9 +15,12 @@ mod task_progress;
 mod tool_use;
 mod user_instructions;
 
+pub use act_vs_plan_mode::*;
 pub use agent_role::*;
 pub use capabilities::*;
+pub use cli_subagents::*;
 pub use editing_files::*;
+pub use feedback::*;
 pub use mcp::*;
 pub use objective::*;
 pub use rules::*;
@@ -47,6 +53,14 @@ pub fn get_all_components() -> Vec<ComponentMapping> {
             func: |v, c| Box::pin(get_system_info(v.clone(), c.clone())),
         },
         ComponentMapping {
+            id: PromptSection::ActVsPlanMode,
+            func: |v, c| Box::pin(get_act_vs_plan_mode(v.clone(), c.clone())),
+        },
+        ComponentMapping {
+            id: PromptSection::CliSubagents,
+            func: |v, c| Box::pin(get_cli_subagents(v.clone(), c.clone())),
+        },
+        ComponentMapping {
             id: PromptSection::Mcp,
             func: |v, c| Box::pin(get_mcp_section(v.clone(), c.clone())),
         },
@@ -77,6 +91,10 @@ pub fn get_all_components() -> Vec<ComponentMapping> {
         ComponentMapping {
             id: PromptSection::TaskProgress,
             func: |v, c| Box::pin(get_task_progress(v.clone(), c.clone())),
+        },
+        ComponentMapping {
+            id: PromptSection::Feedback,
+            func: |v, c| Box::pin(get_feedback(v.clone(), c.clone())),
         },
     ]
 }
