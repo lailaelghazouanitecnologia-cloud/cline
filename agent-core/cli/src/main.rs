@@ -1,6 +1,7 @@
 #![deny(clippy::all)]
 
 mod agent_runner;
+mod approval;
 mod cli;
 mod repl;
 mod server;

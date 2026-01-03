@@ -1,100 +1,50 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { ChatArea } from './components/ChatArea';
+import { useWebSocket } from './hooks/useWebSocket';
 import type { Session, Message, ToolCall } from './types';
 
 function generateId(): string {
   return Math.random().toString(36).substring(2, 9);
 }
 
+const WS_URL = `ws://${window.location.hostname}:3001/ws`;
+
 export function App() {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [isConnected, setIsConnected] = useState(false);
+  const activeSessionRef = useRef<string | null>(null);
 
   const activeSession = sessions.find(s => s.id === activeSessionId) || null;
 
-  const createSession = useCallback((initialTask?: string) => {
-    const session: Session = {
-      id: generateId(),
-      title: initialTask?.slice(0, 50) || 'New Task',
-      createdAt: new Date(),
-      messages: [],
-    };
-    setSessions(prev => [session, ...prev]);
-    setActiveSessionId(session.id);
+  const handleMessage = useCallback((event: { type: string; data: unknown }) => {
+    const sessionId = activeSessionRef.current;
+    if (!sessionId) return;
 
-    if (initialTask) {
-      sendMessage(session.id, initialTask);
+    if (event.type === 'done') {
+      setIsLoading(false);
+      return;
     }
-  }, []);
 
-  const sendMessage = async (sessionId: string, content: string) => {
-    const userMessage: Message = {
-      id: generateId(),
-      role: 'user',
-      content,
-      timestamp: new Date(),
-    };
-
-    setSessions(prev => prev.map(s => {
-      if (s.id !== sessionId) return s;
-      return { ...s, messages: [...s.messages, userMessage] };
-    }));
-
-    setIsLoading(true);
-
-    try {
-      const response = await fetch('/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: content, sessionId }),
-      });
-
-      const reader = response.body?.getReader();
-      if (!reader) throw new Error('No response body');
-
-      const decoder = new TextDecoder();
-      let buffer = '';
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-
-        for (const line of lines) {
-          if (!line.startsWith('data: ')) continue;
-          const data = line.slice(6);
-          if (data === '[DONE]') continue;
-
-          try {
-            const event = JSON.parse(data);
-            handleAgentEvent(sessionId, event);
-          } catch {
-            continue;
-          }
-        }
-      }
-    } catch (error) {
-      const errorMessage: Message = {
-        id: generateId(),
-        role: 'assistant',
-        content: `Error: ${error instanceof Error ? error.message : 'Unknown error'}`,
-        timestamp: new Date(),
-      };
+    if (event.type === 'error') {
+      setIsLoading(false);
       setSessions(prev => prev.map(s => {
         if (s.id !== sessionId) return s;
-        return { ...s, messages: [...s.messages, errorMessage] };
+        return {
+          ...s,
+          messages: [...s.messages, {
+            id: generateId(),
+            role: 'assistant',
+            content: `Error: ${event.data}`,
+            timestamp: new Date(),
+          }],
+        };
       }));
-    } finally {
-      setIsLoading(false);
+      return;
     }
-  };
 
-  const handleAgentEvent = (sessionId: string, event: { type: string; data: unknown }) => {
     setSessions(prev => prev.map(s => {
       if (s.id !== sessionId) return s;
       const messages = [...s.messages];
@@ -108,8 +58,23 @@ export function App() {
         });
       }
 
+      if (event.type === 'approval_required') {
+        const data = event.data as { id: string; tool: string; level: string };
+        messages.push({
+          id: generateId(),
+          role: 'assistant',
+          content: `⚠️ Approval required for ${data.tool} (${data.level})`,
+          timestamp: new Date(),
+        });
+      }
+
       if (event.type === 'tool_start') {
-        const toolData = event.data as { id: string; name: string; input: Record<string, unknown> };
+        const toolData = event.data as {
+          id: string;
+          name: string;
+          input: Record<string, unknown>;
+          requires_approval?: boolean;
+        };
         const toolCall: ToolCall = {
           id: toolData.id,
           name: toolData.name,
@@ -145,23 +110,79 @@ export function App() {
 
       return { ...s, messages };
     }));
-  };
+  }, []);
 
-  const handleSendMessage = (content: string) => {
+  const { send } = useWebSocket(WS_URL, {
+    onMessage: handleMessage,
+    onConnect: () => setIsConnected(true),
+    onDisconnect: () => setIsConnected(false),
+  });
+
+  const createSession = useCallback((initialTask?: string) => {
+    const session: Session = {
+      id: generateId(),
+      title: initialTask?.slice(0, 50) || 'New Task',
+      createdAt: new Date(),
+      messages: [],
+    };
+    setSessions(prev => [session, ...prev]);
+    setActiveSessionId(session.id);
+    activeSessionRef.current = session.id;
+
+    if (initialTask) {
+      const userMessage: Message = {
+        id: generateId(),
+        role: 'user',
+        content: initialTask,
+        timestamp: new Date(),
+      };
+      setSessions(prev => prev.map(s => {
+        if (s.id !== session.id) return s;
+        return { ...s, messages: [userMessage] };
+      }));
+      setIsLoading(true);
+      send('chat', { message: initialTask });
+    }
+  }, [send]);
+
+  const sendMessage = useCallback((sessionId: string, content: string) => {
+    activeSessionRef.current = sessionId;
+
+    const userMessage: Message = {
+      id: generateId(),
+      role: 'user',
+      content,
+      timestamp: new Date(),
+    };
+
+    setSessions(prev => prev.map(s => {
+      if (s.id !== sessionId) return s;
+      return { ...s, messages: [...s.messages, userMessage] };
+    }));
+
+    setIsLoading(true);
+    send('chat', { message: content });
+  }, [send]);
+
+  const handleSendMessage = useCallback((content: string) => {
     if (!activeSessionId) {
       createSession(content);
     } else {
       sendMessage(activeSessionId, content);
     }
-  };
+  }, [activeSessionId, createSession, sendMessage]);
 
   return (
     <div className="app">
       <Sidebar
         sessions={sessions}
         activeSessionId={activeSessionId}
-        onSelectSession={setActiveSessionId}
+        onSelectSession={(id) => {
+          setActiveSessionId(id);
+          activeSessionRef.current = id;
+        }}
         onNewSession={() => createSession()}
+        isConnected={isConnected}
       />
       <ChatArea
         session={activeSession}

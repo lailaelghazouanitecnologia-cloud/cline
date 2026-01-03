@@ -6,7 +6,10 @@ export default defineConfig({
   server: {
     port: 3000,
     proxy: {
-      '/chat': 'http://localhost:3001',
+      '/ws': {
+        target: 'ws://localhost:3001',
+        ws: true,
+      },
     },
   },
 });

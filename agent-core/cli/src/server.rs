@@ -1,17 +1,21 @@
 #![deny(clippy::all)]
 
+use crate::approval::{ApprovalChecker, ApprovalLevel, ApprovalSettings};
 use crate::cli::Args;
 use crate::tool_bridge::ToolBridge;
 use agent_client::providers::OpenAiProvider;
 use agent_client::{ChatMessage, ChatRequest, ContentPart, MessageContent, ModelProvider};
 use agent_common::AgentResult;
 use agent_config::Config;
+use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::State;
-use axum::response::sse::{Event, Sse};
-use axum::routing::post;
-use axum::{Json, Router};
+use axum::response::IntoResponse;
+use axum::routing::get;
+use axum::Router;
+use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use tokio::sync::mpsc;
 use tower_http::cors::{Any, CorsLayer};
 
 #[derive(Clone)]
@@ -20,21 +24,32 @@ struct AppState {
     config: Arc<Config>,
     bridge: Arc<ToolBridge>,
     max_turns: u32,
+    yolo: bool,
 }
 
 #[derive(Deserialize)]
-struct ChatInput {
-    message: String,
-    #[allow(dead_code)]
+struct ClientMessage {
+    #[serde(rename = "type")]
+    msg_type: String,
     #[serde(default)]
-    session_id: Option<String>,
+    data: serde_json::Value,
 }
 
 #[derive(Serialize)]
-struct AgentEvent {
+struct ServerMessage {
     #[serde(rename = "type")]
-    event_type: String,
+    msg_type: String,
     data: serde_json::Value,
+}
+
+impl ServerMessage {
+    fn new(msg_type: &str, data: serde_json::Value) -> Self {
+        Self { msg_type: msg_type.to_string(), data }
+    }
+
+    fn to_json(&self) -> String {
+        serde_json::to_string(self).unwrap_or_default()
+    }
 }
 
 pub async fn run_server(args: Args) -> AgentResult<()> {
@@ -48,13 +63,12 @@ pub async fn run_server(args: Args) -> AgentResult<()> {
     let provider = OpenAiProvider::new(&api_key, config.model_id()?)
         .with_base_url(&provider_config.base_url);
 
-    let bridge = Arc::new(ToolBridge::new(config.clone()));
-
     let state = AppState {
         provider: Arc::new(provider),
-        config: Arc::new(config),
-        bridge,
+        config: Arc::new(config.clone()),
+        bridge: Arc::new(ToolBridge::new(config)),
         max_turns: args.max_turns,
+        yolo: args.yolo,
     };
 
     let cors = CorsLayer::new()
@@ -63,12 +77,12 @@ pub async fn run_server(args: Args) -> AgentResult<()> {
         .allow_headers(Any);
 
     let app = Router::new()
-        .route("/chat", post(chat_handler))
+        .route("/ws", get(ws_handler))
         .layer(cors)
         .with_state(state);
 
     let addr = format!("0.0.0.0:{}", args.port);
-    println!("Server running at http://{}", addr);
+    println!("WebSocket server running at ws://{}/ws", addr);
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     axum::serve(listener, app).await?;
@@ -76,97 +90,143 @@ pub async fn run_server(args: Args) -> AgentResult<()> {
     Ok(())
 }
 
-async fn chat_handler(
+async fn ws_handler(
+    ws: WebSocketUpgrade,
     State(state): State<AppState>,
-    Json(input): Json<ChatInput>,
-) -> Sse<impl futures::Stream<Item = Result<Event, std::convert::Infallible>>> {
-    let stream = async_stream::stream! {
-        let system = system_prompt(&state.config);
-        let mut messages = vec![
-            ChatMessage::system(system),
-            ChatMessage::user(input.message),
-        ];
-
-        for turn in 1..=state.max_turns {
-            let tools = crate::agent_runner::get_tool_definitions();
-            let request = ChatRequest {
-                messages: messages.clone(),
-                tools: Some(tools),
-                max_tokens: Some(4096),
-                temperature: Some(0.7),
-                stop: None,
-            };
-
-            let response = match state.provider.chat(request).await {
-                Ok(r) => r,
-                Err(e) => {
-                    yield Ok(emit_event("error", serde_json::json!(e.to_string())));
-                    break;
-                }
-            };
-
-            let tool_calls = extract_tool_calls(&response.content);
-            let text = response.content.as_text().map(String::from);
-
-            if tool_calls.is_empty() {
-                let msg = text.unwrap_or_else(|| "Done".to_string());
-                yield Ok(emit_event("message", serde_json::json!(msg)));
-                break;
-            }
-
-            messages.push(ChatMessage {
-                role: agent_client::Role::Assistant,
-                content: response.content,
-            });
-
-            if let Some(t) = text.filter(|s| !s.is_empty()) {
-                yield Ok(emit_event("message", serde_json::json!(t)));
-            }
-
-            for (id, name, input_val) in tool_calls {
-                yield Ok(emit_event("tool_start", serde_json::json!({
-                    "id": id, "name": name, "input": input_val
-                })));
-
-                let result = state.bridge.execute_tool(&name, input_val).await;
-                let (output, is_error) = match result {
-                    Ok(out) => (out, false),
-                    Err(e) => (e.to_string(), true),
-                };
-
-                let content = if is_error {
-                    format!("Error: {}", output)
-                } else {
-                    output.clone()
-                };
-
-                messages.push(ChatMessage::tool(&id, content));
-
-                let truncated = if output.len() > 500 {
-                    format!("{}...", &output[..500])
-                } else {
-                    output
-                };
-
-                yield Ok(emit_event("tool_end", serde_json::json!({
-                    "id": id, "output": truncated, "error": is_error
-                })));
-            }
-        }
-
-        yield Ok(Event::default().data("[DONE]"));
-    };
-
-    Sse::new(stream)
+) -> impl IntoResponse {
+    ws.on_upgrade(|socket| handle_socket(socket, state))
 }
 
-fn emit_event(event_type: &str, data: serde_json::Value) -> Event {
-    let event = AgentEvent {
-        event_type: event_type.to_string(),
-        data,
+async fn handle_socket(socket: WebSocket, state: AppState) {
+    let (mut sender, mut receiver) = socket.split();
+    let (tx, mut rx) = mpsc::channel::<ServerMessage>(32);
+
+    let send_task = tokio::spawn(async move {
+        while let Some(msg) = rx.recv().await {
+            if sender.send(Message::Text(msg.to_json().into())).await.is_err() {
+                break;
+            }
+        }
+    });
+
+    while let Some(Ok(msg)) = receiver.next().await {
+        if let Message::Text(text) = msg {
+            if let Ok(client_msg) = serde_json::from_str::<ClientMessage>(&text) {
+                if client_msg.msg_type == "chat" {
+                    let message = client_msg.data.get("message")
+                        .and_then(|m| m.as_str())
+                        .unwrap_or("")
+                        .to_string();
+
+                    if !message.is_empty() {
+                        let tx_clone = tx.clone();
+                        let state_clone = state.clone();
+                        tokio::spawn(async move {
+                            run_agent_loop(state_clone, message, tx_clone).await;
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    send_task.abort();
+}
+
+async fn run_agent_loop(state: AppState, user_message: String, tx: mpsc::Sender<ServerMessage>) {
+    let settings = if state.yolo {
+        ApprovalSettings::yolo()
+    } else {
+        ApprovalSettings::default_safe()
     };
-    let json = serde_json::to_string(&event).unwrap_or_default();
-    Event::default().data(json)
+    let checker = ApprovalChecker::new(settings);
+
+    let system = system_prompt(&state.config);
+    let mut messages = vec![
+        ChatMessage::system(system),
+        ChatMessage::user(user_message),
+    ];
+
+    for _turn in 1..=state.max_turns {
+        let tools = crate::agent_runner::get_tool_definitions();
+        let request = ChatRequest {
+            messages: messages.clone(),
+            tools: Some(tools),
+            max_tokens: Some(4096),
+            temperature: Some(0.7),
+            stop: None,
+        };
+
+        let response = match state.provider.chat(request).await {
+            Ok(r) => r,
+            Err(e) => {
+                let _ = tx.send(ServerMessage::new("error", serde_json::json!(e.to_string()))).await;
+                break;
+            }
+        };
+
+        let tool_calls = extract_tool_calls(&response.content);
+        let text = response.content.as_text().map(String::from);
+
+        if tool_calls.is_empty() {
+            let msg = text.unwrap_or_else(|| "Done".to_string());
+            let _ = tx.send(ServerMessage::new("message", serde_json::json!(msg))).await;
+            break;
+        }
+
+        messages.push(ChatMessage {
+            role: agent_client::Role::Assistant,
+            content: response.content,
+        });
+
+        if let Some(t) = text.filter(|s| !s.is_empty()) {
+            let _ = tx.send(ServerMessage::new("message", serde_json::json!(t))).await;
+        }
+
+        for (id, name, input_val) in tool_calls {
+            let approval_level = checker.check_tool(&name, &input_val);
+
+            if approval_level != ApprovalLevel::Auto {
+                let _ = tx.send(ServerMessage::new("approval_required", serde_json::json!({
+                    "id": id,
+                    "tool": name,
+                    "level": format!("{:?}", approval_level),
+                    "input": input_val
+                }))).await;
+            }
+
+            let _ = tx.send(ServerMessage::new("tool_start", serde_json::json!({
+                "id": id, "name": name, "input": input_val,
+                "requires_approval": approval_level != ApprovalLevel::Auto
+            }))).await;
+
+            let result = state.bridge.execute_tool(&name, input_val).await;
+            let (output, is_error) = match result {
+                Ok(out) => (out, false),
+                Err(e) => (e.to_string(), true),
+            };
+
+            let content = if is_error {
+                format!("Error: {}", output)
+            } else {
+                output.clone()
+            };
+
+            messages.push(ChatMessage::tool(&id, content));
+
+            let truncated = if output.len() > 500 {
+                format!("{}...", &output[..500])
+            } else {
+                output
+            };
+
+            let _ = tx.send(ServerMessage::new("tool_end", serde_json::json!({
+                "id": id, "output": truncated, "error": is_error
+            }))).await;
+        }
+    }
+
+    let _ = tx.send(ServerMessage::new("done", serde_json::json!(null))).await;
 }
 
 fn system_prompt(config: &Config) -> String {

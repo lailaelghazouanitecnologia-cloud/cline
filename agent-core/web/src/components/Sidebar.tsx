@@ -1,4 +1,4 @@
-import { MessageSquarePlus, Zap } from 'lucide-react';
+import { MessageSquarePlus, Zap, Wifi, WifiOff } from 'lucide-react';
 import type { Session } from '../types';
 
 interface SidebarProps {
@@ -6,6 +6,7 @@ interface SidebarProps {
   activeSessionId: string | null;
   onSelectSession: (id: string) => void;
   onNewSession: () => void;
+  isConnected?: boolean;
 }
 
 function formatTime(date: Date): string {
@@ -19,15 +20,28 @@ function formatTime(date: Date): string {
   return date.toLocaleDateString();
 }
 
-export function Sidebar({ sessions, activeSessionId, onSelectSession, onNewSession }: SidebarProps) {
+export function Sidebar({
+  sessions,
+  activeSessionId,
+  onSelectSession,
+  onNewSession,
+  isConnected = false,
+}: SidebarProps) {
   return (
     <aside className="sidebar">
       <header className="sidebar-header">
         <Zap size={20} />
         <h1>Cline Agent</h1>
+        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 4 }}>
+          {isConnected ? (
+            <Wifi size={14} style={{ color: 'var(--success)' }} />
+          ) : (
+            <WifiOff size={14} style={{ color: 'var(--error)' }} />
+          )}
+        </div>
       </header>
 
-      <button className="new-task-btn" onClick={onNewSession}>
+      <button className="new-task-btn" onClick={onNewSession} disabled={!isConnected}>
         <MessageSquarePlus size={16} style={{ marginRight: 8, verticalAlign: 'middle' }} />
         New Task
       </button>
@@ -46,7 +60,7 @@ export function Sidebar({ sessions, activeSessionId, onSelectSession, onNewSessi
 
         {sessions.length === 0 && (
           <div style={{ padding: 16, color: 'var(--text-muted)', fontSize: 13 }}>
-            No tasks yet. Start a new one!
+            {isConnected ? 'No tasks yet. Start a new one!' : 'Connecting to server...'}
           </div>
         )}
       </div>
