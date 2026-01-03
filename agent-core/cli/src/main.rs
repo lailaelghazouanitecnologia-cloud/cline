@@ -14,6 +14,7 @@ use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() {
+    dotenvy::dotenv().ok();
     setup_tracing();
 
     let args = Args::parse();
