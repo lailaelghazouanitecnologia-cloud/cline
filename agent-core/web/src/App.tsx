@@ -230,7 +230,14 @@ export function App() {
           setActiveSessionId(id);
           activeSessionRef.current = id;
         }}
-        onNewSession={() => createSession()}
+        onNewSession={(task) => createSession(task)}
+        onDeleteSession={(id) => {
+          send('delete_session', { sessionId: id });
+          setSessions(prev => prev.filter(s => s.id !== id));
+          if (activeSessionId === id) {
+            setActiveSessionId(null);
+          }
+        }}
         isConnected={isConnected}
       />
       <ChatArea
