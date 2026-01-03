@@ -254,7 +254,7 @@ fn extract_tool_calls(content: &MessageContent) -> Vec<(String, String, serde_js
         .unwrap_or_default()
 }
 
-fn get_tool_definitions() -> Vec<ToolDefinition> {
+pub fn get_tool_definitions() -> Vec<ToolDefinition> {
     vec![
         ToolDefinition {
             name: "read_file".to_string(),

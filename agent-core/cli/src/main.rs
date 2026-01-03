@@ -3,6 +3,7 @@
 mod agent_runner;
 mod cli;
 mod repl;
+mod server;
 mod tool_bridge;
 
 use clap::Parser;
@@ -22,8 +23,12 @@ async fn main() {
 }
 
 async fn run(args: Args) -> agent_common::AgentResult<()> {
-    let runner = agent_runner::AgentRunner::new(args)?;
-    runner.run().await
+    if args.serve {
+        server::run_server(args).await
+    } else {
+        let runner = agent_runner::AgentRunner::new(args)?;
+        runner.run().await
+    }
 }
 
 fn setup_tracing() {

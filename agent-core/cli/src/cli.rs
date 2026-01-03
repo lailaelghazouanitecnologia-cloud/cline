@@ -30,6 +30,12 @@ pub struct Args {
 
     #[arg(long, default_value = "false")]
     pub verbose: bool,
+
+    #[arg(long, default_value = "false")]
+    pub serve: bool,
+
+    #[arg(long, default_value = "3001")]
+    pub port: u16,
 }
 
 impl Args {
