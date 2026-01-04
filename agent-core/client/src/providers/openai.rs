@@ -22,8 +22,19 @@ pub struct OpenAiProvider {
 
 impl OpenAiProvider {
     pub fn new(api_key: impl Into<String>, model_id: impl Into<String>) -> Self {
+        let mut builder = Client::builder()
+            .danger_accept_invalid_certs(std::env::var("SKIP_TLS_VERIFY").is_ok());
+
+        if let Ok(proxy_url) = std::env::var("HTTPS_PROXY").or_else(|_| std::env::var("https_proxy")) {
+            if let Ok(proxy) = reqwest::Proxy::https(&proxy_url) {
+                builder = builder.proxy(proxy);
+            }
+        }
+
+        let client = builder.build().unwrap_or_else(|_| Client::new());
+
         Self {
-            client: Client::new(),
+            client,
             api_key: api_key.into(),
             model_id: model_id.into(),
             base_url: "https://api.openai.com/v1".to_string(),
