@@ -4,6 +4,8 @@ mod agent_runner;
 mod approval;
 mod cli;
 mod context;
+mod export;
+mod mentions;
 mod repl;
 mod server;
 mod slash_commands;

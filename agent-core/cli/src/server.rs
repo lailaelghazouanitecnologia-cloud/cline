@@ -3,6 +3,8 @@
 use crate::approval::{ApprovalChecker, ApprovalLevel, ApprovalSettings};
 use crate::cli::Args;
 use crate::context::ContextManager;
+use crate::export::ConversationExporter;
+use crate::mentions::parse_and_resolve_mentions;
 use crate::slash_commands::{CommandRegistry, SlashCommandParser};
 use crate::store::SessionStore;
 use crate::tool_bridge::ToolBridge;
@@ -475,6 +477,24 @@ async fn handle_local_command(
             }))).await;
             true
         }
+        "export" => {
+            let exporter = ConversationExporter::new(&state.store);
+            match exporter.export_to_markdown(session_id) {
+                Ok(markdown) => {
+                    let _ = tx.send(ServerMessage::new("export", serde_json::json!({
+                        "session_id": session_id,
+                        "format": "markdown",
+                        "content": markdown
+                    }))).await;
+                }
+                Err(e) => {
+                    let _ = tx.send(ServerMessage::new("error", serde_json::json!({
+                        "message": format!("Export failed: {}", e)
+                    }))).await;
+                }
+            }
+            true
+        }
         _ => false,
     }
 }
@@ -505,9 +525,19 @@ async fn run_agent_loop(
         }
     }
 
-    let processed_message = match parsed_cmd {
-        Some(cmd) => format!("{}{}", cmd.instruction, cmd.text_without_command),
+    let text_for_mentions = match &parsed_cmd {
+        Some(cmd) => cmd.text_without_command.clone(),
         None => user_message.clone(),
+    };
+
+    let resolved_message = parse_and_resolve_mentions(
+        &text_for_mentions,
+        &state.config.working_directory,
+    ).await;
+
+    let processed_message = match parsed_cmd {
+        Some(cmd) => format!("{}{}", cmd.instruction, resolved_message),
+        None => resolved_message,
     };
 
     let base_url = get_provider_url(&provider_id);
