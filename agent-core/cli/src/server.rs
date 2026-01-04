@@ -2,9 +2,10 @@
 
 use crate::approval::{ApprovalChecker, ApprovalLevel, ApprovalSettings};
 use crate::cli::Args;
-use crate::context::{ContextManager, FileAction};
+use crate::context::ContextManager;
 use crate::store::SessionStore;
 use crate::tool_bridge::ToolBridge;
+use crate::usage::{RequestUsage, UsageTracker};
 use agent_client::providers::OpenAiProvider;
 use agent_client::{
     ChatMessage, ChatRequest, ContentPart, DeltaType, MessageContent, ModelProvider,
@@ -41,6 +42,7 @@ struct AppState {
     bridge: Arc<ToolBridge>,
     store: Arc<SessionStore>,
     context_manager: ContextManager,
+    usage_tracker: UsageTracker,
     max_turns: u32,
     yolo: bool,
 }
@@ -117,6 +119,7 @@ pub async fn run_server(args: Args) -> AgentResult<()> {
         bridge: Arc::new(ToolBridge::new(config)),
         store: Arc::new(store),
         context_manager: ContextManager::new(),
+        usage_tracker: UsageTracker::new(),
         max_turns: args.max_turns,
         yolo: args.yolo,
     };
@@ -133,7 +136,9 @@ pub async fn run_server(args: Args) -> AgentResult<()> {
         .route("/api/sessions/{id}", get(get_session))
         .route("/api/sessions/{id}/messages", get(get_messages))
         .route("/api/sessions/{id}/context", get(get_session_context))
+        .route("/api/sessions/{id}/usage", get(get_session_usage))
         .route("/api/context/active", get(list_active_contexts))
+        .route("/api/usage/total", get(get_total_usage))
         .layer(cors)
         .with_state(state);
 
@@ -191,6 +196,22 @@ async fn get_session_context(
 async fn list_active_contexts(State(state): State<AppState>) -> Json<serde_json::Value> {
     let contexts = state.context_manager.list_active();
     Json(serde_json::json!({ "contexts": contexts }))
+}
+
+async fn get_session_usage(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Json<serde_json::Value> {
+    match state.usage_tracker.get_session_usage(&id) {
+        Some(usage) => Json(serde_json::json!({ "usage": usage })),
+        None => Json(serde_json::json!({ "error": "No usage data for session" })),
+    }
+}
+
+async fn get_total_usage(State(state): State<AppState>) -> Json<serde_json::Value> {
+    let summaries = state.usage_tracker.get_all_summaries();
+    let total_cost = state.usage_tracker.get_total_cost();
+    Json(serde_json::json!({ "sessions": summaries, "total_cost_usd": total_cost }))
 }
 
 async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {
@@ -469,6 +490,15 @@ async fn run_agent_loop(
             }
         }
 
+        let usage = RequestUsage::new(buffer.usage.prompt_tokens, buffer.usage.completion_tokens);
+        state.usage_tracker.record_usage(&session_id, &model_id, &provider_id, usage.clone(), turn);
+        let _ = tx.send(ServerMessage::new("usage", serde_json::json!({
+            "turn": turn,
+            "input_tokens": usage.input_tokens,
+            "output_tokens": usage.output_tokens,
+            "total_tokens": usage.total_tokens
+        }))).await;
+
         let content = buffer.into_content();
         let tool_calls = extract_tool_calls(&content);
         let text = content.as_text().map(String::from);
@@ -514,6 +544,14 @@ async fn run_agent_loop(
 
     if let Some(ctx) = state.context_manager.get_context(&session_id) {
         let _ = tx.send(ServerMessage::new("context_summary", serde_json::to_value(ctx.to_summary()).unwrap())).await;
+    }
+
+    if let Some(usage_summary) = state.usage_tracker.get_session_summary(&session_id) {
+        let _ = tx.send(ServerMessage::new("usage_summary", serde_json::json!({
+            "total_tokens": usage_summary.total_tokens,
+            "total_cost_usd": usage_summary.total_cost_usd,
+            "request_count": usage_summary.request_count
+        }))).await;
     }
 
     let _ = tx.send(ServerMessage::new("done", serde_json::json!(null))).await;
@@ -598,6 +636,15 @@ async fn resume_agent_loop(
             }
         }
 
+        let usage = RequestUsage::new(buffer.usage.prompt_tokens, buffer.usage.completion_tokens);
+        state.usage_tracker.record_usage(&session_id, &model_id, &provider_id, usage.clone(), turn);
+        let _ = tx.send(ServerMessage::new("usage", serde_json::json!({
+            "turn": turn,
+            "input_tokens": usage.input_tokens,
+            "output_tokens": usage.output_tokens,
+            "total_tokens": usage.total_tokens
+        }))).await;
+
         let content = buffer.into_content();
         let tool_calls = extract_tool_calls(&content);
         let text = content.as_text().map(String::from);
@@ -643,6 +690,14 @@ async fn resume_agent_loop(
 
     if let Some(ctx) = state.context_manager.get_context(&session_id) {
         let _ = tx.send(ServerMessage::new("context_summary", serde_json::to_value(ctx.to_summary()).unwrap())).await;
+    }
+
+    if let Some(usage_summary) = state.usage_tracker.get_session_summary(&session_id) {
+        let _ = tx.send(ServerMessage::new("usage_summary", serde_json::json!({
+            "total_tokens": usage_summary.total_tokens,
+            "total_cost_usd": usage_summary.total_cost_usd,
+            "request_count": usage_summary.request_count
+        }))).await;
     }
 
     let _ = tx.send(ServerMessage::new("done", serde_json::json!(null))).await;

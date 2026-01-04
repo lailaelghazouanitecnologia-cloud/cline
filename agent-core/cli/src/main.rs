@@ -8,6 +8,7 @@ mod repl;
 mod server;
 mod store;
 mod tool_bridge;
+mod usage;
 
 use clap::Parser;
 use cli::Args;
