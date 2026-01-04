@@ -6,6 +6,8 @@ interface ChatAreaProps {
   session: Session | null;
   isLoading: boolean;
   onSendMessage: (content: string) => void;
+  hasApiKey?: boolean;
+  onOpenSettings?: () => void;
 }
 
 function ToolCallCard({ tool }: { tool: ToolCall }) {
@@ -48,7 +50,13 @@ function MessageBubble({ message }: { message: Message }) {
   );
 }
 
-export function ChatArea({ session, isLoading, onSendMessage }: ChatAreaProps) {
+export function ChatArea({
+  session,
+  isLoading,
+  onSendMessage,
+  hasApiKey = true,
+  onOpenSettings,
+}: ChatAreaProps) {
   const [input, setInput] = useState('');
   const chatRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -69,6 +77,10 @@ export function ChatArea({ session, isLoading, onSendMessage }: ChatAreaProps) {
   const handleSubmit = () => {
     const trimmed = input.trim();
     if (!trimmed || isLoading) return;
+    if (!hasApiKey) {
+      onOpenSettings?.();
+      return;
+    }
     onSendMessage(trimmed);
     setInput('');
   };

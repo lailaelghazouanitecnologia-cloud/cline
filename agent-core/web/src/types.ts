@@ -60,3 +60,16 @@ export interface Central {
   sessionId: string | null;
   title: string;
 }
+
+export interface ProviderConfig {
+  id: string;
+  name: string;
+  baseUrl: string;
+  apiKeyEnv: string;
+}
+
+export interface AppSettings {
+  apiKey: string;
+  providerId: string;
+  modelId: string;
+}

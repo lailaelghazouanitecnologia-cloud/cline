@@ -8,10 +8,12 @@ import {
   Archive,
   ChevronDown,
   ChevronRight,
+  Settings,
+  Key,
 } from 'lucide-react';
 import { WorkspaceWidget } from './widgets/WorkspaceWidget';
 import { BookmarksWidget } from './widgets/BookmarksWidget';
-import type { Session, Workspace, FileNode, Bookmark, Widget } from '../types';
+import type { Session, Workspace, FileNode, Bookmark, Widget, AppSettings } from '../types';
 
 interface SidebarProps {
   sessions: Session[];
@@ -19,7 +21,10 @@ interface SidebarProps {
   onSelectSession: (id: string) => void;
   onNewSession: (task?: string) => void;
   onDeleteSession?: (id: string) => void;
+  onOpenSettings?: () => void;
   isConnected?: boolean;
+  hasApiKey?: boolean;
+  settings?: AppSettings;
 }
 
 function formatTime(date: Date): string {
@@ -79,7 +84,10 @@ export function Sidebar({
   onSelectSession,
   onNewSession,
   onDeleteSession,
+  onOpenSettings,
   isConnected = false,
+  hasApiKey = false,
+  settings,
 }: SidebarProps) {
   const [inputValue, setInputValue] = useState('');
   const [workspaces, setWorkspaces] = useState<Workspace[]>(defaultWorkspaces);
@@ -98,7 +106,11 @@ export function Sidebar({
   }, [inputValue]);
 
   const handleSubmit = () => {
-    if (!inputValue.trim() || !isConnected) return;
+    if (!inputValue.trim()) return;
+    if (!hasApiKey) {
+      onOpenSettings?.();
+      return;
+    }
     onNewSession(inputValue.trim());
     setInputValue('');
   };
@@ -247,15 +259,21 @@ export function Sidebar({
           <span className="badge">Preview</span>
         </div>
 
+        {!hasApiKey && (
+          <button className="api-key-banner" onClick={onOpenSettings}>
+            <Key size={14} />
+            <span>Configure API Key</span>
+          </button>
+        )}
+
         <div className="input-container">
           <textarea
             ref={textareaRef}
             className="input-textarea"
-            placeholder="Ask Claude to write code..."
+            placeholder={hasApiKey ? "Ask Claude to write code..." : "Configure API key first..."}
             value={inputValue}
             onChange={(e) => setInputValue(e.target.value)}
             onKeyDown={handleKeyDown}
-            disabled={!isConnected}
             rows={2}
           />
 
@@ -271,7 +289,7 @@ export function Sidebar({
             <button
               className="btn-submit"
               onClick={handleSubmit}
-              disabled={!inputValue.trim() || !isConnected}
+              disabled={!inputValue.trim()}
               type="button"
             >
               <Send size={14} />
@@ -284,9 +302,9 @@ export function Sidebar({
               <span>{activeWorkspace?.name || 'Select workspace'}</span>
             </button>
             <div className="divider-vertical" />
-            <button className="selector-btn" type="button">
+            <button className="selector-btn" type="button" onClick={onOpenSettings}>
               <Cloud size={16} />
-              <span>groq</span>
+              <span>{settings?.providerId || 'groq'}</span>
             </button>
           </div>
         </div>
@@ -301,6 +319,9 @@ export function Sidebar({
           <div className="user-avatar">U</div>
         </button>
         <div className="footer-actions">
+          <button className="settings-btn" onClick={onOpenSettings} title="Settings">
+            <Settings size={16} />
+          </button>
           <div className="connection-indicator">
             <span className={`connection-dot ${isConnected ? 'connected' : 'disconnected'}`} />
             <span>{isConnected ? 'Connected' : 'Offline'}</span>

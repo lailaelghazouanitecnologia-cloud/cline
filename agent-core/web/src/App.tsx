@@ -1,7 +1,9 @@
-import { useState, useCallback, useRef, useEffect } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { ChatArea } from './components/ChatArea';
+import { SettingsModal } from './components/SettingsModal';
 import { useWebSocket } from './hooks/useWebSocket';
+import { useSettings } from './hooks/useSettings';
 import type { Session, Message, ToolCall, Central } from './types';
 
 function generateId(): string {
@@ -25,7 +27,10 @@ export function App() {
   const [activeCentralId, setActiveCentralId] = useState('central-1');
   const [isLoading, setIsLoading] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const activeSessionRef = useRef<string | null>(null);
+
+  const { settings, updateSettings, hasApiKey } = useSettings();
 
   const activeCentral = centrals.find(c => c.id === activeCentralId);
   const activeSessionId = activeCentral?.sessionId || null;
@@ -64,6 +69,12 @@ export function App() {
       setCentrals(prev => prev.map(c =>
         c.id === activeCentralId ? { ...c, sessionId: data.id } : c
       ));
+      return;
+    }
+
+    if (event.type === 'api_key_required') {
+      setShowSettings(true);
+      setIsLoading(false);
       return;
     }
 
@@ -173,6 +184,11 @@ export function App() {
   }, [activeCentralId]);
 
   const createSession = useCallback((initialTask?: string) => {
+    if (!hasApiKey) {
+      setShowSettings(true);
+      return;
+    }
+
     if (!initialTask) {
       const session: Session = {
         id: generateId(),
@@ -204,10 +220,20 @@ export function App() {
 
     selectSession(tempId);
     setIsLoading(true);
-    send('chat', { message: initialTask });
-  }, [send, selectSession]);
+    send('chat', {
+      message: initialTask,
+      apiKey: settings.apiKey,
+      providerId: settings.providerId,
+      modelId: settings.modelId,
+    });
+  }, [send, selectSession, hasApiKey, settings]);
 
   const sendMessage = useCallback((sessionId: string, content: string) => {
+    if (!hasApiKey) {
+      setShowSettings(true);
+      return;
+    }
+
     activeSessionRef.current = sessionId;
 
     const userMessage: Message = {
@@ -223,8 +249,14 @@ export function App() {
     }));
 
     setIsLoading(true);
-    send('chat', { message: content, sessionId });
-  }, [send]);
+    send('chat', {
+      message: content,
+      sessionId,
+      apiKey: settings.apiKey,
+      providerId: settings.providerId,
+      modelId: settings.modelId,
+    });
+  }, [send, hasApiKey, settings]);
 
   const handleSendMessage = useCallback((content: string) => {
     if (!activeSessionId) {
@@ -267,7 +299,10 @@ export function App() {
             selectSession('');
           }
         }}
+        onOpenSettings={() => setShowSettings(true)}
         isConnected={isConnected}
+        hasApiKey={hasApiKey}
+        settings={settings}
       />
       <div className="centrals-area">
         <div className="centrals-tabs">
@@ -301,8 +336,16 @@ export function App() {
           session={activeSession}
           isLoading={isLoading}
           onSendMessage={handleSendMessage}
+          hasApiKey={hasApiKey}
+          onOpenSettings={() => setShowSettings(true)}
         />
       </div>
+      <SettingsModal
+        isOpen={showSettings}
+        onClose={() => setShowSettings(false)}
+        settings={settings}
+        onSave={updateSettings}
+      />
     </div>
   );
 }
