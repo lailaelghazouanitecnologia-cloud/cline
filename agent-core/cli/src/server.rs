@@ -248,6 +248,7 @@ async fn handle_client_message(
             }))).await;
         }
         "chat" => handle_chat(state, tx, &msg.data).await,
+        "resume_session" => handle_resume_session(state, tx, &msg.data).await,
         "load_session" => {
             let session_id = msg.data.get("sessionId").and_then(|s| s.as_str()).unwrap_or("");
             if let Ok(messages) = state.store.get_messages(session_id) {
@@ -293,6 +294,71 @@ async fn handle_chat(state: &AppState, tx: &mpsc::Sender<ServerMessage>, data: &
     }
 }
 
+async fn handle_resume_session(state: &AppState, tx: &mpsc::Sender<ServerMessage>, data: &serde_json::Value) {
+    let session_id = match data.get("sessionId").and_then(|s| s.as_str()) {
+        Some(id) => id.to_string(),
+        None => {
+            let _ = tx.send(ServerMessage::new("error", serde_json::json!({
+                "code": "invalid_request",
+                "message": "sessionId is required"
+            }))).await;
+            return;
+        }
+    };
+
+    let api_key = data.get("apiKey").and_then(|k| k.as_str()).map(String::from);
+    let provider_id = data.get("providerId").and_then(|p| p.as_str()).unwrap_or("groq").to_string();
+    let model_id = data.get("modelId").and_then(|m| m.as_str()).unwrap_or("llama-3.3-70b-versatile").to_string();
+    let new_message = data.get("message").and_then(|m| m.as_str()).unwrap_or("").to_string();
+
+    if api_key.is_none() || api_key.as_ref().map(|k| k.is_empty()).unwrap_or(true) {
+        let _ = tx.send(ServerMessage::new("api_key_required", serde_json::json!({
+            "message": "API key is required"
+        }))).await;
+        return;
+    }
+
+    let session = match state.store.get_session(&session_id) {
+        Ok(Some(s)) => s,
+        _ => {
+            let _ = tx.send(ServerMessage::new("error", serde_json::json!({
+                "code": "session_not_found",
+                "message": "Session not found"
+            }))).await;
+            return;
+        }
+    };
+
+    let stored_messages = match state.store.get_messages(&session_id) {
+        Ok(msgs) => msgs,
+        Err(_) => {
+            let _ = tx.send(ServerMessage::new("error", serde_json::json!({
+                "code": "load_error",
+                "message": "Failed to load session messages"
+            }))).await;
+            return;
+        }
+    };
+
+    let _ = tx.send(ServerMessage::new("session_resumed", serde_json::json!({
+        "id": session.id,
+        "title": session.title,
+        "message_count": stored_messages.len()
+    }))).await;
+
+    if new_message.is_empty() {
+        return;
+    }
+
+    let tx_clone = tx.clone();
+    let state_clone = state.clone();
+    let api_key = api_key.unwrap();
+
+    tokio::spawn(async move {
+        resume_agent_loop(state_clone, session_id, stored_messages, new_message, api_key, provider_id, model_id, tx_clone).await;
+    });
+}
+
 fn get_provider_url(provider_id: &str) -> &'static str {
     PROVIDER_URLS.iter()
         .find(|(id, _)| *id == provider_id)
@@ -332,6 +398,131 @@ async fn run_agent_loop(
 
     let system = system_prompt(&state.config, &state.bridge);
     let mut messages = vec![ChatMessage::system(system), ChatMessage::user(&user_message)];
+
+    for turn in 1..=state.max_turns {
+        let _ = tx.send(ServerMessage::new("turn_start", serde_json::json!({
+            "turn": turn, "max_turns": state.max_turns
+        }))).await;
+
+        let tools = state.bridge.tool_definitions();
+        let request = ChatRequest {
+            messages: messages.clone(),
+            tools: Some(tools),
+            max_tokens: Some(4096),
+            temperature: Some(0.7),
+            stop: None,
+        };
+
+        let stream_result = call_with_retry(&provider, request, &provider_id, &model_id, &tx).await;
+        let mut stream = match stream_result {
+            Ok(s) => s,
+            Err(_) => break,
+        };
+
+        let mut buffer = StreamBuffer::default();
+
+        while let Some(event_result) = stream.next().await {
+            match event_result {
+                Ok(event) => {
+                    buffer.process_event(&event);
+                    if let Some(delta) = extract_text_delta(&event.event_type) {
+                        let _ = tx.send(ServerMessage::new("text_delta", serde_json::json!({
+                            "delta": delta
+                        }))).await;
+                    }
+                }
+                Err(e) => {
+                    let api_error = ApiError::from_error(&e, Some(&provider_id), Some(&model_id));
+                    let _ = tx.send(ServerMessage::new("error", serde_json::to_value(&api_error).unwrap())).await;
+                    break;
+                }
+            }
+        }
+
+        let content = buffer.into_content();
+        let tool_calls = extract_tool_calls(&content);
+        let text = content.as_text().map(String::from);
+
+        if tool_calls.is_empty() {
+            let msg = text.unwrap_or_else(|| "Done".to_string());
+            let msg_id = uuid::Uuid::new_v4().to_string();
+            let _ = state.store.add_message(&msg_id, &session_id, "assistant", &msg, None);
+            let _ = tx.send(ServerMessage::new("message", serde_json::json!(msg))).await;
+            break;
+        }
+
+        messages.push(ChatMessage { role: agent_client::Role::Assistant, content });
+
+        if let Some(ref t) = text {
+            if !t.is_empty() {
+                let _ = tx.send(ServerMessage::new("message", serde_json::json!(t))).await;
+            }
+        }
+
+        let mut tool_results = Vec::new();
+
+        for (id, name, input_val) in tool_calls {
+            let tool_result = execute_tool_with_retry(&state, &checker, &id, &name, &input_val, &tx).await;
+
+            let (output, is_error) = match tool_result {
+                Ok(out) => (out, false),
+                Err(e) => (e, true),
+            };
+
+            let content = if is_error { format!("Error: {}", output) } else { output.clone() };
+            messages.push(ChatMessage::tool(&id, &content));
+
+            tool_results.push(serde_json::json!({
+                "id": id, "name": name, "input": input_val, "output": output, "error": is_error
+            }));
+        }
+
+        let msg_id = uuid::Uuid::new_v4().to_string();
+        let tool_calls_json = serde_json::to_string(&tool_results).ok();
+        let _ = state.store.add_message(&msg_id, &session_id, "assistant", text.as_deref().unwrap_or(""), tool_calls_json.as_deref());
+    }
+
+    let _ = tx.send(ServerMessage::new("done", serde_json::json!(null))).await;
+}
+
+async fn resume_agent_loop(
+    state: AppState,
+    session_id: String,
+    stored_messages: Vec<crate::store::StoredMessage>,
+    new_message: String,
+    api_key: String,
+    provider_id: String,
+    model_id: String,
+    tx: mpsc::Sender<ServerMessage>,
+) {
+    let base_url = get_provider_url(&provider_id);
+    let provider = OpenAiProvider::new(&api_key, &model_id).with_base_url(base_url);
+
+    let settings = if state.yolo { ApprovalSettings::yolo() } else { ApprovalSettings::default_safe() };
+    let checker = ApprovalChecker::new(settings);
+
+    let system = system_prompt(&state.config, &state.bridge);
+    let mut messages = vec![ChatMessage::system(system)];
+
+    for stored in &stored_messages {
+        match stored.role.as_str() {
+            "user" => messages.push(ChatMessage::user(&stored.content)),
+            "assistant" => messages.push(ChatMessage {
+                role: agent_client::Role::Assistant,
+                content: agent_client::MessageContent::Text(stored.content.clone()),
+            }),
+            _ => {}
+        }
+    }
+
+    let msg_id = uuid::Uuid::new_v4().to_string();
+    let _ = state.store.add_message(&msg_id, &session_id, "user", &new_message, None);
+    messages.push(ChatMessage::user(&new_message));
+
+    let _ = tx.send(ServerMessage::new("session_continue", serde_json::json!({
+        "session_id": session_id,
+        "restored_messages": stored_messages.len()
+    }))).await;
 
     for turn in 1..=state.max_turns {
         let _ = tx.send(ServerMessage::new("turn_start", serde_json::json!({

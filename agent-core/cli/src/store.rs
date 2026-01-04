@@ -251,6 +251,43 @@ impl SessionStore {
 
         messages.collect()
     }
+
+    pub fn get_last_n_messages(&self, session_id: &str, n: usize) -> SqlResult<Vec<StoredMessage>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, session_id, role, content, tool_calls, created_at
+             FROM messages WHERE session_id = ?1 ORDER BY created_at DESC LIMIT ?2",
+        )?;
+
+        let messages: Vec<StoredMessage> = stmt.query_map(params![session_id, n], |row| {
+            Ok(StoredMessage {
+                id: row.get(0)?,
+                session_id: row.get(1)?,
+                role: row.get(2)?,
+                content: row.get(3)?,
+                tool_calls: row.get(4)?,
+                created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(5)?)
+                    .unwrap()
+                    .with_timezone(&Utc),
+            })
+        })?.collect::<Result<Vec<_>, _>>()?;
+
+        Ok(messages.into_iter().rev().collect())
+    }
+
+    pub fn count_messages(&self, session_id: &str) -> SqlResult<usize> {
+        let conn = self.conn.lock().unwrap();
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM messages WHERE session_id = ?1",
+            [session_id],
+            |row| row.get(0),
+        )?;
+        Ok(count as usize)
+    }
+
+    pub fn session_exists(&self, id: &str) -> bool {
+        self.get_session(id).ok().flatten().is_some()
+    }
 }
 
 impl Clone for SessionStore {
