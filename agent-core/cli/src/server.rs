@@ -5,7 +5,10 @@ use crate::cli::Args;
 use crate::store::SessionStore;
 use crate::tool_bridge::ToolBridge;
 use agent_client::providers::OpenAiProvider;
-use agent_client::{ChatMessage, ChatRequest, ContentPart, MessageContent, ModelProvider};
+use agent_client::{
+    ChatMessage, ChatRequest, ContentPart, DeltaType, MessageContent, ModelProvider,
+    StreamBuffer, StreamEventType,
+};
 use agent_common::AgentResult;
 use agent_config::Config;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
@@ -124,10 +127,7 @@ async fn get_messages(
     }
 }
 
-async fn ws_handler(
-    ws: WebSocketUpgrade,
-    State(state): State<AppState>,
-) -> impl IntoResponse {
+async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {
     ws.on_upgrade(|socket| handle_socket(socket, state))
 }
 
@@ -166,59 +166,9 @@ async fn handle_client_message(
     msg: ClientMessage,
 ) {
     match msg.msg_type.as_str() {
-        "chat" => {
-            let message = msg.data.get("message")
-                .and_then(|m| m.as_str())
-                .unwrap_or("")
-                .to_string();
-
-            let session_id = msg.data.get("sessionId")
-                .and_then(|s| s.as_str())
-                .map(String::from);
-
-            let api_key = msg.data.get("apiKey")
-                .and_then(|k| k.as_str())
-                .map(String::from);
-
-            let provider_id = msg.data.get("providerId")
-                .and_then(|p| p.as_str())
-                .unwrap_or("groq")
-                .to_string();
-
-            let model_id = msg.data.get("modelId")
-                .and_then(|m| m.as_str())
-                .unwrap_or("llama-3.3-70b-versatile")
-                .to_string();
-
-            if api_key.is_none() || api_key.as_ref().map(|k| k.is_empty()).unwrap_or(true) {
-                let _ = tx.send(ServerMessage::new("api_key_required", serde_json::json!({
-                    "message": "API key is required"
-                }))).await;
-                return;
-            }
-
-            if !message.is_empty() {
-                let tx_clone = tx.clone();
-                let state_clone = state.clone();
-                let api_key = api_key.unwrap();
-                tokio::spawn(async move {
-                    run_agent_loop(
-                        state_clone,
-                        message,
-                        session_id,
-                        api_key,
-                        provider_id,
-                        model_id,
-                        tx_clone,
-                    ).await;
-                });
-            }
-        }
+        "chat" => handle_chat(state, tx, &msg.data).await,
         "load_session" => {
-            let session_id = msg.data.get("sessionId")
-                .and_then(|s| s.as_str())
-                .unwrap_or("");
-
+            let session_id = msg.data.get("sessionId").and_then(|s| s.as_str()).unwrap_or("");
             if let Ok(messages) = state.store.get_messages(session_id) {
                 let _ = tx.send(ServerMessage::new("session_messages", serde_json::json!(messages))).await;
             }
@@ -229,15 +179,36 @@ async fn handle_client_message(
             }
         }
         "delete_session" => {
-            let session_id = msg.data.get("sessionId")
-                .and_then(|s| s.as_str())
-                .unwrap_or("");
-
+            let session_id = msg.data.get("sessionId").and_then(|s| s.as_str()).unwrap_or("");
             if state.store.delete_session(session_id).is_ok() {
                 let _ = tx.send(ServerMessage::new("session_deleted", serde_json::json!(session_id))).await;
             }
         }
         _ => {}
+    }
+}
+
+async fn handle_chat(state: &AppState, tx: &mpsc::Sender<ServerMessage>, data: &serde_json::Value) {
+    let message = data.get("message").and_then(|m| m.as_str()).unwrap_or("").to_string();
+    let session_id = data.get("sessionId").and_then(|s| s.as_str()).map(String::from);
+    let api_key = data.get("apiKey").and_then(|k| k.as_str()).map(String::from);
+    let provider_id = data.get("providerId").and_then(|p| p.as_str()).unwrap_or("groq").to_string();
+    let model_id = data.get("modelId").and_then(|m| m.as_str()).unwrap_or("llama-3.3-70b-versatile").to_string();
+
+    if api_key.is_none() || api_key.as_ref().map(|k| k.is_empty()).unwrap_or(true) {
+        let _ = tx.send(ServerMessage::new("api_key_required", serde_json::json!({
+            "message": "API key is required"
+        }))).await;
+        return;
+    }
+
+    if !message.is_empty() {
+        let tx_clone = tx.clone();
+        let state_clone = state.clone();
+        let api_key = api_key.unwrap();
+        tokio::spawn(async move {
+            run_agent_loop(state_clone, message, session_id, api_key, provider_id, model_id, tx_clone).await;
+        });
     }
 }
 
@@ -275,18 +246,11 @@ async fn run_agent_loop(
         "title": title
     }))).await;
 
-    let settings = if state.yolo {
-        ApprovalSettings::yolo()
-    } else {
-        ApprovalSettings::default_safe()
-    };
+    let settings = if state.yolo { ApprovalSettings::yolo() } else { ApprovalSettings::default_safe() };
     let checker = ApprovalChecker::new(settings);
 
     let system = system_prompt(&state.config, &state.bridge);
-    let mut messages = vec![
-        ChatMessage::system(system),
-        ChatMessage::user(&user_message),
-    ];
+    let mut messages = vec![ChatMessage::system(system), ChatMessage::user(&user_message)];
 
     for _turn in 1..=state.max_turns {
         let tools = state.bridge.tool_definitions();
@@ -298,31 +262,47 @@ async fn run_agent_loop(
             stop: None,
         };
 
-        let response = match provider.chat(request).await {
-            Ok(r) => r,
+        let stream_result = provider.chat_stream(request).await;
+        let mut stream = match stream_result {
+            Ok(s) => s,
             Err(e) => {
                 let _ = tx.send(ServerMessage::new("error", serde_json::json!(e.to_string()))).await;
                 break;
             }
         };
 
-        let tool_calls = extract_tool_calls(&response.content);
-        let text = response.content.as_text().map(String::from);
+        let mut buffer = StreamBuffer::default();
+
+        while let Some(event_result) = stream.next().await {
+            match event_result {
+                Ok(event) => {
+                    buffer.process_event(&event);
+                    if let Some(delta) = extract_text_delta(&event.event_type) {
+                        let _ = tx.send(ServerMessage::new("text_delta", serde_json::json!({
+                            "delta": delta
+                        }))).await;
+                    }
+                }
+                Err(e) => {
+                    let _ = tx.send(ServerMessage::new("error", serde_json::json!(e.to_string()))).await;
+                    break;
+                }
+            }
+        }
+
+        let content = buffer.into_content();
+        let tool_calls = extract_tool_calls(&content);
+        let text = content.as_text().map(String::from);
 
         if tool_calls.is_empty() {
             let msg = text.unwrap_or_else(|| "Done".to_string());
-
             let msg_id = uuid::Uuid::new_v4().to_string();
             let _ = state.store.add_message(&msg_id, &session_id, "assistant", &msg, None);
-
             let _ = tx.send(ServerMessage::new("message", serde_json::json!(msg))).await;
             break;
         }
 
-        messages.push(ChatMessage {
-            role: agent_client::Role::Assistant,
-            content: response.content,
-        });
+        messages.push(ChatMessage { role: agent_client::Role::Assistant, content });
 
         if let Some(ref t) = text {
             if !t.is_empty() {
@@ -337,10 +317,7 @@ async fn run_agent_loop(
 
             if approval_level != ApprovalLevel::Auto {
                 let _ = tx.send(ServerMessage::new("approval_required", serde_json::json!({
-                    "id": id,
-                    "tool": name,
-                    "level": format!("{:?}", approval_level),
-                    "input": input_val
+                    "id": id, "tool": name, "level": format!("{:?}", approval_level), "input": input_val
                 }))).await;
             }
 
@@ -355,27 +332,14 @@ async fn run_agent_loop(
                 Err(e) => (e.to_string(), true),
             };
 
-            let content = if is_error {
-                format!("Error: {}", output)
-            } else {
-                output.clone()
-            };
-
+            let content = if is_error { format!("Error: {}", output) } else { output.clone() };
             messages.push(ChatMessage::tool(&id, &content));
 
             tool_results.push(serde_json::json!({
-                "id": id,
-                "name": name,
-                "input": input_val,
-                "output": output,
-                "error": is_error
+                "id": id, "name": name, "input": input_val, "output": output, "error": is_error
             }));
 
-            let truncated = if output.len() > 500 {
-                format!("{}...", &output[..500])
-            } else {
-                output
-            };
+            let truncated = if output.len() > 500 { format!("{}...", &output[..500]) } else { output };
 
             let _ = tx.send(ServerMessage::new("tool_end", serde_json::json!({
                 "id": id, "output": truncated, "error": is_error
@@ -384,16 +348,19 @@ async fn run_agent_loop(
 
         let msg_id = uuid::Uuid::new_v4().to_string();
         let tool_calls_json = serde_json::to_string(&tool_results).ok();
-        let _ = state.store.add_message(
-            &msg_id,
-            &session_id,
-            "assistant",
-            text.as_deref().unwrap_or(""),
-            tool_calls_json.as_deref(),
-        );
+        let _ = state.store.add_message(&msg_id, &session_id, "assistant", text.as_deref().unwrap_or(""), tool_calls_json.as_deref());
     }
 
     let _ = tx.send(ServerMessage::new("done", serde_json::json!(null))).await;
+}
+
+fn extract_text_delta(event_type: &StreamEventType) -> Option<String> {
+    if let StreamEventType::ContentBlockDelta { delta } = event_type {
+        if let DeltaType::TextDelta { text } = &delta.delta_type {
+            return Some(text.clone());
+        }
+    }
+    None
 }
 
 fn system_prompt(config: &Config, bridge: &ToolBridge) -> String {

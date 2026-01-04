@@ -29,6 +29,7 @@ export function App() {
   const [isConnected, setIsConnected] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const activeSessionRef = useRef<string | null>(null);
+  const streamingMessageRef = useRef<string | null>(null);
 
   const { settings, updateSettings, hasApiKey } = useSettings();
 
@@ -83,6 +84,32 @@ export function App() {
 
     if (event.type === 'done') {
       setIsLoading(false);
+      streamingMessageRef.current = null;
+      return;
+    }
+
+    if (event.type === 'text_delta') {
+      const data = event.data as { delta: string };
+      setSessions(prev => prev.map(s => {
+        if (s.id !== sessionId) return s;
+        const messages = [...s.messages];
+        const lastMsg = messages[messages.length - 1];
+
+        if (lastMsg?.role === 'assistant' && streamingMessageRef.current === lastMsg.id) {
+          lastMsg.content += data.delta;
+        } else {
+          const newId = generateId();
+          streamingMessageRef.current = newId;
+          messages.push({
+            id: newId,
+            role: 'assistant',
+            content: data.delta,
+            timestamp: new Date(),
+          });
+        }
+
+        return { ...s, messages };
+      }));
       return;
     }
 
@@ -108,12 +135,18 @@ export function App() {
       const messages = [...s.messages];
 
       if (event.type === 'message') {
-        messages.push({
-          id: generateId(),
-          role: 'assistant',
-          content: event.data as string,
-          timestamp: new Date(),
-        });
+        streamingMessageRef.current = null;
+        const lastMsg = messages[messages.length - 1];
+        if (lastMsg?.role === 'assistant' && !lastMsg.toolCalls) {
+          lastMsg.content = event.data as string;
+        } else {
+          messages.push({
+            id: generateId(),
+            role: 'assistant',
+            content: event.data as string,
+            timestamp: new Date(),
+          });
+        }
       }
 
       if (event.type === 'approval_required') {
