@@ -19,7 +19,9 @@ use axum::{Json, Router};
 use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::mpsc;
+use tokio::time::interval;
 use tower_http::cors::{Any, CorsLayer};
 
 const PROVIDER_URLS: &[(&str, &str)] = &[
@@ -27,6 +29,10 @@ const PROVIDER_URLS: &[(&str, &str)] = &[
     ("openai", "https://api.openai.com/v1"),
     ("anthropic", "https://api.anthropic.com"),
 ];
+
+const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
+const MAX_RETRIES: u32 = 3;
+const RETRY_DELAY_MS: u64 = 1000;
 
 #[derive(Clone)]
 struct AppState {
@@ -45,7 +51,7 @@ struct ClientMessage {
     data: serde_json::Value,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 struct ServerMessage {
     #[serde(rename = "type")]
     msg_type: String,
@@ -59,6 +65,41 @@ impl ServerMessage {
 
     fn to_json(&self) -> String {
         serde_json::to_string(self).unwrap_or_default()
+    }
+}
+
+#[derive(Clone, Serialize)]
+struct ApiError {
+    code: String,
+    message: String,
+    provider: Option<String>,
+    model: Option<String>,
+    is_rate_limit: bool,
+    is_retryable: bool,
+}
+
+impl ApiError {
+    fn from_error(e: &agent_common::AgentError, provider: Option<&str>, model: Option<&str>) -> Self {
+        let msg = e.to_string();
+        let is_rate_limit = msg.contains("429")
+            || msg.to_lowercase().contains("rate limit")
+            || msg.to_lowercase().contains("quota exceeded")
+            || msg.to_lowercase().contains("too many requests");
+
+        let is_retryable = is_rate_limit
+            || msg.contains("500")
+            || msg.contains("502")
+            || msg.contains("503")
+            || msg.to_lowercase().contains("timeout");
+
+        Self {
+            code: if is_rate_limit { "rate_limit".into() } else { "api_error".into() },
+            message: msg,
+            provider: provider.map(String::from),
+            model: model.map(String::from),
+            is_rate_limit,
+            is_retryable,
+        }
     }
 }
 
@@ -84,6 +125,7 @@ pub async fn run_server(args: Args) -> AgentResult<()> {
 
     let app = Router::new()
         .route("/ws", get(ws_handler))
+        .route("/health", get(health_check))
         .route("/api/sessions", get(list_sessions))
         .route("/api/sessions/{id}", get(get_session))
         .route("/api/sessions/{id}/messages", get(get_messages))
@@ -97,6 +139,10 @@ pub async fn run_server(args: Args) -> AgentResult<()> {
     axum::serve(listener, app).await?;
 
     Ok(())
+}
+
+async fn health_check() -> Json<serde_json::Value> {
+    Json(serde_json::json!({ "status": "ok", "timestamp": chrono::Utc::now().to_rfc3339() }))
 }
 
 async fn list_sessions(State(state): State<AppState>) -> Json<serde_json::Value> {
@@ -133,27 +179,57 @@ async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl
 
 async fn handle_socket(socket: WebSocket, state: AppState) {
     let (mut sender, mut receiver) = socket.split();
-    let (tx, mut rx) = mpsc::channel::<ServerMessage>(32);
+    let (tx, mut rx) = mpsc::channel::<ServerMessage>(64);
+    let (ping_tx, mut ping_rx) = mpsc::channel::<()>(1);
 
     let send_task = tokio::spawn(async move {
-        while let Some(msg) = rx.recv().await {
-            if sender.send(Message::Text(msg.to_json().into())).await.is_err() {
-                break;
+        let mut heartbeat = interval(HEARTBEAT_INTERVAL);
+        loop {
+            tokio::select! {
+                Some(msg) = rx.recv() => {
+                    if sender.send(Message::Text(msg.to_json().into())).await.is_err() {
+                        break;
+                    }
+                }
+                _ = heartbeat.tick() => {
+                    if sender.send(Message::Ping(vec![].into())).await.is_err() {
+                        break;
+                    }
+                }
+                _ = ping_rx.recv() => {
+                    if sender.send(Message::Pong(vec![].into())).await.is_err() {
+                        break;
+                    }
+                }
+                else => break,
             }
         }
     });
 
     let store = state.store.clone();
+    let _ = tx.send(ServerMessage::new("connected", serde_json::json!({
+        "timestamp": chrono::Utc::now().to_rfc3339()
+    }))).await;
+
     let _ = tx.send(ServerMessage::new("sessions", match store.list_sessions(20) {
         Ok(sessions) => serde_json::json!(sessions),
         Err(_) => serde_json::json!([]),
     })).await;
 
-    while let Some(Ok(msg)) = receiver.next().await {
-        if let Message::Text(text) = msg {
-            if let Ok(client_msg) = serde_json::from_str::<ClientMessage>(&text) {
-                handle_client_message(&state, &tx, client_msg).await;
+    while let Some(result) = receiver.next().await {
+        match result {
+            Ok(Message::Text(text)) => {
+                if let Ok(client_msg) = serde_json::from_str::<ClientMessage>(&text) {
+                    handle_client_message(&state, &tx, client_msg).await;
+                }
             }
+            Ok(Message::Ping(_)) => {
+                let _ = ping_tx.send(()).await;
+            }
+            Ok(Message::Pong(_)) => {}
+            Ok(Message::Close(_)) => break,
+            Err(_) => break,
+            _ => {}
         }
     }
 
@@ -166,6 +242,11 @@ async fn handle_client_message(
     msg: ClientMessage,
 ) {
     match msg.msg_type.as_str() {
+        "ping" => {
+            let _ = tx.send(ServerMessage::new("pong", serde_json::json!({
+                "timestamp": chrono::Utc::now().to_rfc3339()
+            }))).await;
+        }
         "chat" => handle_chat(state, tx, &msg.data).await,
         "load_session" => {
             let session_id = msg.data.get("sessionId").and_then(|s| s.as_str()).unwrap_or("");
@@ -252,7 +333,11 @@ async fn run_agent_loop(
     let system = system_prompt(&state.config, &state.bridge);
     let mut messages = vec![ChatMessage::system(system), ChatMessage::user(&user_message)];
 
-    for _turn in 1..=state.max_turns {
+    for turn in 1..=state.max_turns {
+        let _ = tx.send(ServerMessage::new("turn_start", serde_json::json!({
+            "turn": turn, "max_turns": state.max_turns
+        }))).await;
+
         let tools = state.bridge.tool_definitions();
         let request = ChatRequest {
             messages: messages.clone(),
@@ -262,13 +347,10 @@ async fn run_agent_loop(
             stop: None,
         };
 
-        let stream_result = provider.chat_stream(request).await;
+        let stream_result = call_with_retry(&provider, request, &provider_id, &model_id, &tx).await;
         let mut stream = match stream_result {
             Ok(s) => s,
-            Err(e) => {
-                let _ = tx.send(ServerMessage::new("error", serde_json::json!(e.to_string()))).await;
-                break;
-            }
+            Err(_) => break,
         };
 
         let mut buffer = StreamBuffer::default();
@@ -284,7 +366,8 @@ async fn run_agent_loop(
                     }
                 }
                 Err(e) => {
-                    let _ = tx.send(ServerMessage::new("error", serde_json::json!(e.to_string()))).await;
+                    let api_error = ApiError::from_error(&e, Some(&provider_id), Some(&model_id));
+                    let _ = tx.send(ServerMessage::new("error", serde_json::to_value(&api_error).unwrap())).await;
                     break;
                 }
             }
@@ -313,23 +396,11 @@ async fn run_agent_loop(
         let mut tool_results = Vec::new();
 
         for (id, name, input_val) in tool_calls {
-            let approval_level = checker.check_tool(&name, &input_val);
+            let tool_result = execute_tool_with_retry(&state, &checker, &id, &name, &input_val, &tx).await;
 
-            if approval_level != ApprovalLevel::Auto {
-                let _ = tx.send(ServerMessage::new("approval_required", serde_json::json!({
-                    "id": id, "tool": name, "level": format!("{:?}", approval_level), "input": input_val
-                }))).await;
-            }
-
-            let _ = tx.send(ServerMessage::new("tool_start", serde_json::json!({
-                "id": id, "name": name, "input": input_val,
-                "requires_approval": approval_level != ApprovalLevel::Auto
-            }))).await;
-
-            let result = state.bridge.execute_tool(&name, input_val.clone()).await;
-            let (output, is_error) = match result {
+            let (output, is_error) = match tool_result {
                 Ok(out) => (out, false),
-                Err(e) => (e.to_string(), true),
+                Err(e) => (e, true),
             };
 
             let content = if is_error { format!("Error: {}", output) } else { output.clone() };
@@ -338,12 +409,6 @@ async fn run_agent_loop(
             tool_results.push(serde_json::json!({
                 "id": id, "name": name, "input": input_val, "output": output, "error": is_error
             }));
-
-            let truncated = if output.len() > 500 { format!("{}...", &output[..500]) } else { output };
-
-            let _ = tx.send(ServerMessage::new("tool_end", serde_json::json!({
-                "id": id, "output": truncated, "error": is_error
-            }))).await;
         }
 
         let msg_id = uuid::Uuid::new_v4().to_string();
@@ -352,6 +417,96 @@ async fn run_agent_loop(
     }
 
     let _ = tx.send(ServerMessage::new("done", serde_json::json!(null))).await;
+}
+
+async fn call_with_retry(
+    provider: &OpenAiProvider,
+    request: ChatRequest,
+    provider_id: &str,
+    model_id: &str,
+    tx: &mpsc::Sender<ServerMessage>,
+) -> Result<impl futures::Stream<Item = AgentResult<agent_client::StreamEvent>>, ()> {
+    for attempt in 0..MAX_RETRIES {
+        match provider.chat_stream(request.clone()).await {
+            Ok(stream) => return Ok(stream),
+            Err(e) => {
+                let api_error = ApiError::from_error(&e, Some(provider_id), Some(model_id));
+
+                if !api_error.is_retryable || attempt == MAX_RETRIES - 1 {
+                    let _ = tx.send(ServerMessage::new("error", serde_json::to_value(&api_error).unwrap())).await;
+                    return Err(());
+                }
+
+                let delay = RETRY_DELAY_MS * (2_u64.pow(attempt));
+                let _ = tx.send(ServerMessage::new("retry", serde_json::json!({
+                    "attempt": attempt + 1,
+                    "max_retries": MAX_RETRIES,
+                    "delay_ms": delay,
+                    "reason": api_error.message
+                }))).await;
+
+                tokio::time::sleep(Duration::from_millis(delay)).await;
+            }
+        }
+    }
+    Err(())
+}
+
+async fn execute_tool_with_retry(
+    state: &AppState,
+    checker: &ApprovalChecker,
+    id: &str,
+    name: &str,
+    input_val: &serde_json::Value,
+    tx: &mpsc::Sender<ServerMessage>,
+) -> Result<String, String> {
+    let approval_level = checker.check_tool(name, input_val);
+
+    if approval_level != ApprovalLevel::Auto {
+        let _ = tx.send(ServerMessage::new("approval_required", serde_json::json!({
+            "id": id, "tool": name, "level": format!("{:?}", approval_level), "input": input_val
+        }))).await;
+    }
+
+    let _ = tx.send(ServerMessage::new("tool_start", serde_json::json!({
+        "id": id, "name": name, "input": input_val,
+        "requires_approval": approval_level != ApprovalLevel::Auto
+    }))).await;
+
+    let mut last_error = String::new();
+
+    for attempt in 0..MAX_RETRIES {
+        match state.bridge.execute_tool(name, input_val.clone()).await {
+            Ok(output) => {
+                let truncated = if output.len() > 500 {
+                    format!("{}...", &output[..500])
+                } else {
+                    output.clone()
+                };
+                let _ = tx.send(ServerMessage::new("tool_end", serde_json::json!({
+                    "id": id, "output": truncated, "error": false
+                }))).await;
+                return Ok(output);
+            }
+            Err(e) => {
+                last_error = e.to_string();
+
+                if attempt < MAX_RETRIES - 1 {
+                    let delay = RETRY_DELAY_MS * (2_u64.pow(attempt));
+                    let _ = tx.send(ServerMessage::new("tool_retry", serde_json::json!({
+                        "id": id, "name": name, "attempt": attempt + 1, "delay_ms": delay
+                    }))).await;
+                    tokio::time::sleep(Duration::from_millis(delay)).await;
+                }
+            }
+        }
+    }
+
+    let _ = tx.send(ServerMessage::new("tool_end", serde_json::json!({
+        "id": id, "output": last_error.clone(), "error": true
+    }))).await;
+
+    Err(last_error)
 }
 
 fn extract_text_delta(event_type: &StreamEventType) -> Option<String> {

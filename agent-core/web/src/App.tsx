@@ -38,6 +38,10 @@ export function App() {
   const activeSession = sessions.find(s => s.id === activeSessionId) || null;
 
   const handleMessage = useCallback((event: { type: string; data: unknown }) => {
+    if (event.type === 'connected' || event.type === 'pong') {
+      return;
+    }
+
     if (event.type === 'sessions') {
       const storedSessions = event.data as StoredSession[];
       setSessions(prev => {
@@ -88,6 +92,43 @@ export function App() {
       return;
     }
 
+    if (event.type === 'turn_start') {
+      return;
+    }
+
+    if (event.type === 'retry') {
+      const data = event.data as { attempt: number; max_retries: number; delay_ms: number; reason: string };
+      setSessions(prev => prev.map(s => {
+        if (s.id !== sessionId) return s;
+        return {
+          ...s,
+          messages: [...s.messages, {
+            id: generateId(),
+            role: 'system',
+            content: `Retrying (${data.attempt}/${data.max_retries})... ${data.reason}`,
+            timestamp: new Date(),
+          }],
+        };
+      }));
+      return;
+    }
+
+    if (event.type === 'tool_retry') {
+      const data = event.data as { id: string; name: string; attempt: number };
+      setSessions(prev => prev.map(s => {
+        if (s.id !== sessionId) return s;
+        for (const msg of s.messages) {
+          if (!msg.toolCalls) continue;
+          const tool = msg.toolCalls.find(t => t.id === data.id);
+          if (tool) {
+            tool.status = 'running';
+          }
+        }
+        return { ...s };
+      }));
+      return;
+    }
+
     if (event.type === 'text_delta') {
       const data = event.data as { delta: string };
       setSessions(prev => prev.map(s => {
@@ -115,6 +156,11 @@ export function App() {
 
     if (event.type === 'error') {
       setIsLoading(false);
+      const errorData = event.data as { message?: string; code?: string; is_rate_limit?: boolean } | string;
+      const errorMsg = typeof errorData === 'string'
+        ? errorData
+        : `${errorData.code || 'Error'}: ${errorData.message || 'Unknown error'}`;
+
       setSessions(prev => prev.map(s => {
         if (s.id !== sessionId) return s;
         return {
@@ -122,7 +168,7 @@ export function App() {
           messages: [...s.messages, {
             id: generateId(),
             role: 'assistant',
-            content: `Error: ${event.data}`,
+            content: `Error: ${errorMsg}`,
             timestamp: new Date(),
           }],
         };
