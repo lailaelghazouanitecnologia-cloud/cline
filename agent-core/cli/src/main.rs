@@ -3,6 +3,7 @@
 mod agent_runner;
 mod approval;
 mod cli;
+mod context;
 mod repl;
 mod server;
 mod store;

@@ -2,6 +2,7 @@
 
 use crate::approval::{ApprovalChecker, ApprovalLevel, ApprovalSettings};
 use crate::cli::Args;
+use crate::context::{ContextManager, FileAction};
 use crate::store::SessionStore;
 use crate::tool_bridge::ToolBridge;
 use agent_client::providers::OpenAiProvider;
@@ -39,6 +40,7 @@ struct AppState {
     config: Arc<Config>,
     bridge: Arc<ToolBridge>,
     store: Arc<SessionStore>,
+    context_manager: ContextManager,
     max_turns: u32,
     yolo: bool,
 }
@@ -114,6 +116,7 @@ pub async fn run_server(args: Args) -> AgentResult<()> {
         config: Arc::new(config.clone()),
         bridge: Arc::new(ToolBridge::new(config)),
         store: Arc::new(store),
+        context_manager: ContextManager::new(),
         max_turns: args.max_turns,
         yolo: args.yolo,
     };
@@ -129,6 +132,8 @@ pub async fn run_server(args: Args) -> AgentResult<()> {
         .route("/api/sessions", get(list_sessions))
         .route("/api/sessions/{id}", get(get_session))
         .route("/api/sessions/{id}/messages", get(get_messages))
+        .route("/api/sessions/{id}/context", get(get_session_context))
+        .route("/api/context/active", get(list_active_contexts))
         .layer(cors)
         .with_state(state);
 
@@ -171,6 +176,21 @@ async fn get_messages(
         Ok(messages) => Json(serde_json::json!({ "messages": messages })),
         Err(e) => Json(serde_json::json!({ "error": e.to_string() })),
     }
+}
+
+async fn get_session_context(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Json<serde_json::Value> {
+    match state.context_manager.get_context(&id) {
+        Some(ctx) => Json(serde_json::json!({ "context": ctx })),
+        None => Json(serde_json::json!({ "error": "Context not found" })),
+    }
+}
+
+async fn list_active_contexts(State(state): State<AppState>) -> Json<serde_json::Value> {
+    let contexts = state.context_manager.list_active();
+    Json(serde_json::json!({ "contexts": contexts }))
 }
 
 async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {
@@ -385,6 +405,13 @@ async fn run_agent_loop(
         let _ = state.store.create_session(&session_id, &title, &provider_id, &model_id);
     }
 
+    state.context_manager.create_context(
+        &session_id,
+        state.config.working_directory.clone(),
+        &provider_id,
+        &model_id,
+    );
+
     let msg_id = uuid::Uuid::new_v4().to_string();
     let _ = state.store.add_message(&msg_id, &session_id, "user", &user_message, None);
 
@@ -399,7 +426,10 @@ async fn run_agent_loop(
     let system = system_prompt(&state.config, &state.bridge);
     let mut messages = vec![ChatMessage::system(system), ChatMessage::user(&user_message)];
 
+    let session_id_clone = session_id.clone();
+
     for turn in 1..=state.max_turns {
+        state.context_manager.update_context(&session_id_clone, |ctx| ctx.increment_turn());
         let _ = tx.send(ServerMessage::new("turn_start", serde_json::json!({
             "turn": turn, "max_turns": state.max_turns
         }))).await;
@@ -480,6 +510,10 @@ async fn run_agent_loop(
         let msg_id = uuid::Uuid::new_v4().to_string();
         let tool_calls_json = serde_json::to_string(&tool_results).ok();
         let _ = state.store.add_message(&msg_id, &session_id, "assistant", text.as_deref().unwrap_or(""), tool_calls_json.as_deref());
+    }
+
+    if let Some(ctx) = state.context_manager.get_context(&session_id) {
+        let _ = tx.send(ServerMessage::new("context_summary", serde_json::to_value(ctx.to_summary()).unwrap())).await;
     }
 
     let _ = tx.send(ServerMessage::new("done", serde_json::json!(null))).await;
@@ -605,6 +639,10 @@ async fn resume_agent_loop(
         let msg_id = uuid::Uuid::new_v4().to_string();
         let tool_calls_json = serde_json::to_string(&tool_results).ok();
         let _ = state.store.add_message(&msg_id, &session_id, "assistant", text.as_deref().unwrap_or(""), tool_calls_json.as_deref());
+    }
+
+    if let Some(ctx) = state.context_manager.get_context(&session_id) {
+        let _ = tx.send(ServerMessage::new("context_summary", serde_json::to_value(ctx.to_summary()).unwrap())).await;
     }
 
     let _ = tx.send(ServerMessage::new("done", serde_json::json!(null))).await;
