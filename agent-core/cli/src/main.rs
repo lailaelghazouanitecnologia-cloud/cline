@@ -26,20 +26,31 @@ async fn main() {
 }
 
 fn load_env() {
-    if dotenvy::dotenv().is_ok() {
-        return;
-    }
-    let locations = [
-        std::env::current_dir().ok().map(|p| p.join(".env")),
-        std::env::current_dir().ok().and_then(|p| p.parent().map(|pp| pp.join(".env"))),
-        std::env::current_exe().ok().and_then(|p| p.parent().map(|pp| pp.join(".env"))),
-        dirs::home_dir().map(|p| p.join(".config/cline-agent/.env")),
-    ];
+    let locations = build_env_locations();
     for loc in locations.into_iter().flatten() {
-        if loc.exists() && dotenvy::from_path(&loc).is_ok() {
-            return;
+        if loc.exists() {
+            if dotenvy::from_path(&loc).is_ok() {
+                eprintln!("[env] Loaded from: {}", loc.display());
+                return;
+            }
         }
     }
+    let _ = dotenvy::dotenv();
+}
+
+fn build_env_locations() -> [Option<std::path::PathBuf>; 6] {
+    let cwd = std::env::current_dir().ok();
+    let exe = std::env::current_exe().ok();
+    let home = dirs::home_dir();
+
+    [
+        cwd.clone().map(|p| p.join(".env")),
+        cwd.clone().and_then(|p| p.parent().map(|pp| pp.join(".env"))),
+        cwd.and_then(|p| p.parent().and_then(|pp| pp.parent().map(|ppp| ppp.join("agent-core/.env")))),
+        exe.clone().and_then(|p| p.parent().map(|pp| pp.join(".env"))),
+        exe.and_then(|p| p.ancestors().nth(3).map(|pp| pp.join("agent-core/.env"))),
+        home.map(|p| p.join(".config/cline-agent/.env")),
+    ]
 }
 
 async fn run(args: Args) -> agent_common::AgentResult<()> {

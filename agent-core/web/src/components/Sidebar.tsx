@@ -1,6 +1,17 @@
 import { useState, useRef, KeyboardEvent, useEffect } from 'react';
-import { Send, Image, MoreHorizontal, FolderGit2, Cloud, Archive } from 'lucide-react';
-import type { Session } from '../types';
+import {
+  Send,
+  Image,
+  MoreHorizontal,
+  FolderGit2,
+  Cloud,
+  Archive,
+  ChevronDown,
+  ChevronRight,
+} from 'lucide-react';
+import { WorkspaceWidget } from './widgets/WorkspaceWidget';
+import { BookmarksWidget } from './widgets/BookmarksWidget';
+import type { Session, Workspace, FileNode, Bookmark, Widget } from '../types';
 
 interface SidebarProps {
   sessions: Session[];
@@ -30,6 +41,38 @@ function formatTime(date: Date): string {
   return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
 }
 
+const defaultWorkspaces: Workspace[] = [
+  { id: '1', name: 'cline-agent', path: '/home/user/cline/agent-core', isActive: true },
+];
+
+const defaultFileTree: FileNode[] = [
+  {
+    name: 'src',
+    path: '/src',
+    type: 'folder',
+    children: [
+      { name: 'main.rs', path: '/src/main.rs', type: 'file' },
+      { name: 'lib.rs', path: '/src/lib.rs', type: 'file' },
+    ],
+  },
+  {
+    name: 'web',
+    path: '/web',
+    type: 'folder',
+    children: [
+      { name: 'App.tsx', path: '/web/App.tsx', type: 'file' },
+      { name: 'styles.css', path: '/web/styles.css', type: 'file' },
+    ],
+  },
+  { name: 'Cargo.toml', path: '/Cargo.toml', type: 'file' },
+];
+
+const defaultWidgets: Widget[] = [
+  { id: 'workspace', type: 'workspace', title: 'Workspace', isCollapsed: false },
+  { id: 'bookmarks', type: 'bookmarks', title: 'Bookmarks', isCollapsed: true },
+  { id: 'sessions', type: 'sessions', title: 'Sessions', isCollapsed: false },
+];
+
 export function Sidebar({
   sessions,
   activeSessionId,
@@ -39,7 +82,13 @@ export function Sidebar({
   isConnected = false,
 }: SidebarProps) {
   const [inputValue, setInputValue] = useState('');
+  const [workspaces, setWorkspaces] = useState<Workspace[]>(defaultWorkspaces);
+  const [fileTree] = useState<FileNode[]>(defaultFileTree);
+  const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
+  const [widgets, setWidgets] = useState<Widget[]>(defaultWidgets);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  const activeWorkspace = workspaces.find(w => w.isActive) || null;
 
   useEffect(() => {
     if (textareaRef.current) {
@@ -64,6 +113,130 @@ export function Sidebar({
   const handleArchive = (e: React.MouseEvent, sessionId: string) => {
     e.stopPropagation();
     onDeleteSession?.(sessionId);
+  };
+
+  const toggleWidget = (widgetId: string) => {
+    setWidgets(prev => prev.map(w =>
+      w.id === widgetId ? { ...w, isCollapsed: !w.isCollapsed } : w
+    ));
+  };
+
+  const handleSelectWorkspace = (id: string) => {
+    setWorkspaces(prev => prev.map(w => ({ ...w, isActive: w.id === id })));
+  };
+
+  const handleAddWorkspace = () => {
+    const newWs: Workspace = {
+      id: Date.now().toString(),
+      name: 'New Workspace',
+      path: '/path/to/workspace',
+      isActive: false,
+    };
+    setWorkspaces(prev => [...prev, newWs]);
+  };
+
+  const handleAddBookmark = () => {
+    const newBm: Bookmark = {
+      id: Date.now().toString(),
+      name: 'new-file.ts',
+      path: '/src/new-file.ts',
+    };
+    setBookmarks(prev => [...prev, newBm]);
+  };
+
+  const handleRemoveBookmark = (id: string) => {
+    setBookmarks(prev => prev.filter(b => b.id !== id));
+  };
+
+  const renderWidget = (widget: Widget) => {
+    const isCollapsed = widget.isCollapsed;
+
+    if (widget.type === 'workspace') {
+      return (
+        <div key={widget.id} className="widget-section">
+          <button className="widget-toggle" onClick={() => toggleWidget(widget.id)}>
+            {isCollapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
+            <span>{widget.title}</span>
+          </button>
+          {!isCollapsed && (
+            <WorkspaceWidget
+              workspaces={workspaces}
+              activeWorkspace={activeWorkspace}
+              fileTree={fileTree}
+              onSelectWorkspace={handleSelectWorkspace}
+              onAddWorkspace={handleAddWorkspace}
+              onRefresh={() => {}}
+              onSelectFile={() => {}}
+            />
+          )}
+        </div>
+      );
+    }
+
+    if (widget.type === 'bookmarks') {
+      return (
+        <div key={widget.id} className="widget-section">
+          <button className="widget-toggle" onClick={() => toggleWidget(widget.id)}>
+            {isCollapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
+            <span>{widget.title}</span>
+          </button>
+          {!isCollapsed && (
+            <BookmarksWidget
+              bookmarks={bookmarks}
+              onSelectBookmark={() => {}}
+              onRemoveBookmark={handleRemoveBookmark}
+              onAddBookmark={handleAddBookmark}
+            />
+          )}
+        </div>
+      );
+    }
+
+    if (widget.type === 'sessions') {
+      return (
+        <div key={widget.id} className="widget-section sessions-section">
+          <button className="widget-toggle" onClick={() => toggleWidget(widget.id)}>
+            {isCollapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
+            <span>{widget.title}</span>
+          </button>
+          {!isCollapsed && (
+            <div className="sessions-list">
+              {sessions.map((session, index) => (
+                <div
+                  key={session.id}
+                  className={`session-item ${session.id === activeSessionId ? 'active' : ''}`}
+                  onClick={() => onSelectSession(session.id)}
+                  style={{ animationDelay: `${index * 30}ms` }}
+                >
+                  <div className="session-content">
+                    <p className="session-title">{session.title}</p>
+                    <span className="session-meta">
+                      <span>{formatTime(session.createdAt)}</span>
+                    </span>
+                  </div>
+                  <div className="session-actions">
+                    <button
+                      className="session-archive-btn"
+                      onClick={(e) => handleArchive(e, session.id)}
+                      title="Archive"
+                    >
+                      <Archive size={14} />
+                    </button>
+                  </div>
+                </div>
+              ))}
+              {sessions.length === 0 && (
+                <div className="empty-sessions">
+                  {isConnected ? 'No sessions yet' : 'Connecting...'}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    return null;
   };
 
   return (
@@ -108,7 +281,7 @@ export function Sidebar({
           <div className="selectors-row">
             <button className="selector-btn flex-grow" type="button">
               <FolderGit2 size={16} />
-              <span>cline-agent</span>
+              <span>{activeWorkspace?.name || 'Select workspace'}</span>
             </button>
             <div className="divider-vertical" />
             <button className="selector-btn" type="button">
@@ -119,41 +292,8 @@ export function Sidebar({
         </div>
       </header>
 
-      <div className="sessions-header">
-        <span className="sessions-title">Sessions</span>
-      </div>
-
-      <div className="sessions-list">
-        {sessions.map((session, index) => (
-          <div
-            key={session.id}
-            className={`session-item ${session.id === activeSessionId ? 'active' : ''}`}
-            onClick={() => onSelectSession(session.id)}
-            style={{ animationDelay: `${index * 30}ms` }}
-          >
-            <div className="session-content">
-              <p className="session-title">{session.title}</p>
-              <span className="session-meta">
-                <span>{formatTime(session.createdAt)}</span>
-              </span>
-            </div>
-            <div className="session-actions">
-              <button
-                className="session-archive-btn"
-                onClick={(e) => handleArchive(e, session.id)}
-                title="Archive"
-              >
-                <Archive size={14} />
-              </button>
-            </div>
-          </div>
-        ))}
-
-        {sessions.length === 0 && (
-          <div className="empty-sessions">
-            {isConnected ? 'No sessions yet' : 'Connecting...'}
-          </div>
-        )}
+      <div className="sidebar-widgets">
+        {widgets.map(widget => renderWidget(widget))}
       </div>
 
       <footer className="sidebar-footer">

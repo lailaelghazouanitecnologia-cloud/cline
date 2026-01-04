@@ -2,7 +2,7 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { ChatArea } from './components/ChatArea';
 import { useWebSocket } from './hooks/useWebSocket';
-import type { Session, Message, ToolCall } from './types';
+import type { Session, Message, ToolCall, Central } from './types';
 
 function generateId(): string {
   return Math.random().toString(36).substring(2, 9);
@@ -19,11 +19,16 @@ interface StoredSession {
 
 export function App() {
   const [sessions, setSessions] = useState<Session[]>([]);
-  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [centrals, setCentrals] = useState<Central[]>([
+    { id: 'central-1', sessionId: null, title: 'Central 1' }
+  ]);
+  const [activeCentralId, setActiveCentralId] = useState('central-1');
   const [isLoading, setIsLoading] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
   const activeSessionRef = useRef<string | null>(null);
 
+  const activeCentral = centrals.find(c => c.id === activeCentralId);
+  const activeSessionId = activeCentral?.sessionId || null;
   const activeSession = sessions.find(s => s.id === activeSessionId) || null;
 
   const handleMessage = useCallback((event: { type: string; data: unknown }) => {
@@ -56,7 +61,9 @@ export function App() {
           messages: [],
         }, ...prev];
       });
-      setActiveSessionId(data.id);
+      setCentrals(prev => prev.map(c =>
+        c.id === activeCentralId ? { ...c, sessionId: data.id } : c
+      ));
       return;
     }
 
@@ -103,7 +110,7 @@ export function App() {
         messages.push({
           id: generateId(),
           role: 'assistant',
-          content: `⚠️ Approval required for ${data.tool} (${data.level})`,
+          content: `Approval required for ${data.tool} (${data.level})`,
           timestamp: new Date(),
         });
       }
@@ -150,13 +157,20 @@ export function App() {
 
       return { ...s, messages };
     }));
-  }, []);
+  }, [activeCentralId]);
 
   const { send } = useWebSocket(WS_URL, {
     onMessage: handleMessage,
     onConnect: () => setIsConnected(true),
     onDisconnect: () => setIsConnected(false),
   });
+
+  const selectSession = useCallback((sessionId: string) => {
+    setCentrals(prev => prev.map(c =>
+      c.id === activeCentralId ? { ...c, sessionId } : c
+    ));
+    activeSessionRef.current = sessionId;
+  }, [activeCentralId]);
 
   const createSession = useCallback((initialTask?: string) => {
     if (!initialTask) {
@@ -167,8 +181,7 @@ export function App() {
         messages: [],
       };
       setSessions(prev => [session, ...prev]);
-      setActiveSessionId(session.id);
-      activeSessionRef.current = session.id;
+      selectSession(session.id);
       return;
     }
 
@@ -189,10 +202,10 @@ export function App() {
       messages: [userMessage],
     }, ...prev]);
 
-    setActiveSessionId(tempId);
+    selectSession(tempId);
     setIsLoading(true);
     send('chat', { message: initialTask });
-  }, [send]);
+  }, [send, selectSession]);
 
   const sendMessage = useCallback((sessionId: string, content: string) => {
     activeSessionRef.current = sessionId;
@@ -221,30 +234,75 @@ export function App() {
     }
   }, [activeSessionId, createSession, sendMessage]);
 
+  const addCentral = useCallback(() => {
+    const newCentral: Central = {
+      id: `central-${Date.now()}`,
+      sessionId: null,
+      title: `Central ${centrals.length + 1}`,
+    };
+    setCentrals(prev => [...prev, newCentral]);
+    setActiveCentralId(newCentral.id);
+  }, [centrals.length]);
+
+  const closeCentral = useCallback((centralId: string) => {
+    if (centrals.length <= 1) return;
+    setCentrals(prev => prev.filter(c => c.id !== centralId));
+    if (activeCentralId === centralId) {
+      const remaining = centrals.filter(c => c.id !== centralId);
+      setActiveCentralId(remaining[0]?.id || '');
+    }
+  }, [centrals, activeCentralId]);
+
   return (
     <div className="app">
       <Sidebar
         sessions={sessions}
         activeSessionId={activeSessionId}
-        onSelectSession={(id) => {
-          setActiveSessionId(id);
-          activeSessionRef.current = id;
-        }}
+        onSelectSession={selectSession}
         onNewSession={(task) => createSession(task)}
         onDeleteSession={(id) => {
           send('delete_session', { sessionId: id });
           setSessions(prev => prev.filter(s => s.id !== id));
           if (activeSessionId === id) {
-            setActiveSessionId(null);
+            selectSession('');
           }
         }}
         isConnected={isConnected}
       />
-      <ChatArea
-        session={activeSession}
-        isLoading={isLoading}
-        onSendMessage={handleSendMessage}
-      />
+      <div className="centrals-area">
+        <div className="centrals-tabs">
+          {centrals.map(central => (
+            <div
+              key={central.id}
+              className={`central-tab ${central.id === activeCentralId ? 'active' : ''}`}
+              onClick={() => setActiveCentralId(central.id)}
+            >
+              <span className="central-tab-title">
+                {sessions.find(s => s.id === central.sessionId)?.title || 'New'}
+              </span>
+              {centrals.length > 1 && (
+                <button
+                  className="central-tab-close"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    closeCentral(central.id);
+                  }}
+                >
+                  ×
+                </button>
+              )}
+            </div>
+          ))}
+          <button className="central-add-btn" onClick={addCentral}>
+            +
+          </button>
+        </div>
+        <ChatArea
+          session={activeSession}
+          isLoading={isLoading}
+          onSendMessage={handleSendMessage}
+        />
+      </div>
     </div>
   );
 }
