@@ -14,7 +14,7 @@ use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() {
-    dotenvy::dotenv().ok();
+    load_env();
     setup_tracing();
 
     let args = Args::parse();
@@ -22,6 +22,23 @@ async fn main() {
     if let Err(e) = run(args).await {
         eprintln!("Error: {}", e);
         std::process::exit(1);
+    }
+}
+
+fn load_env() {
+    if dotenvy::dotenv().is_ok() {
+        return;
+    }
+    let locations = [
+        std::env::current_dir().ok().map(|p| p.join(".env")),
+        std::env::current_dir().ok().and_then(|p| p.parent().map(|pp| pp.join(".env"))),
+        std::env::current_exe().ok().and_then(|p| p.parent().map(|pp| pp.join(".env"))),
+        dirs::home_dir().map(|p| p.join(".config/cline-agent/.env")),
+    ];
+    for loc in locations.into_iter().flatten() {
+        if loc.exists() && dotenvy::from_path(&loc).is_ok() {
+            return;
+        }
     }
 }
 

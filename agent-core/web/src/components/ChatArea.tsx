@@ -76,10 +76,12 @@ export function ChatArea({ session, isLoading, onSendMessage }: ChatAreaProps) {
   if (!session) {
     return (
       <main className="main-area">
+        <div className="main-content-dots" />
+        <div className="main-content-gradient" />
         <div className="empty-state">
           <Zap size={48} style={{ opacity: 0.3 }} />
           <h2>Start a new task</h2>
-          <p>Type a task below to begin</p>
+          <p>Type a task in the sidebar to begin</p>
         </div>
         <div className="input-wrapper">
           <div className="input-area">
