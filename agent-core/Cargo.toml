@@ -8,14 +8,8 @@ members = [
     "core",
     "client",
     "mcp",
-    "sandbox",
-    "prompts",
-    "persist",
-    "hooks",
-    "context",
     "mode",
     "focus",
-    "checkpoint",
     "cli",
 ]
 resolver = "2"
@@ -34,14 +28,8 @@ agent-exec = { path = "exec" }
 agent-core = { path = "core" }
 agent-client = { path = "client" }
 agent-mcp = { path = "mcp" }
-agent-sandbox = { path = "sandbox" }
-agent-prompts = { path = "prompts" }
-agent-persist = { path = "persist" }
-agent-hooks = { path = "hooks" }
-agent-context = { path = "context" }
 agent-mode = { path = "mode" }
 agent-focus = { path = "focus" }
-agent-checkpoint = { path = "checkpoint" }
 
 thiserror = "2.0"
 serde = { version = "1.0", features = ["derive"] }

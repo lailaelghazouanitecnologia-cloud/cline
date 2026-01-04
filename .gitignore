@@ -37,3 +37,6 @@ legacy/webview-ui/src/services/grpc-client.ts
 
 # Misc
 tmp
+
+# Archived/unused crates
+agent-core/_archived
