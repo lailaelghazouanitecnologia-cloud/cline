@@ -6,6 +6,7 @@ mod cli;
 mod context;
 mod repl;
 mod server;
+mod slash_commands;
 mod store;
 mod tool_bridge;
 mod usage;

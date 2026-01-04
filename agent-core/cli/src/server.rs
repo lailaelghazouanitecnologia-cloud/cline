@@ -3,6 +3,7 @@
 use crate::approval::{ApprovalChecker, ApprovalLevel, ApprovalSettings};
 use crate::cli::Args;
 use crate::context::ContextManager;
+use crate::slash_commands::{CommandRegistry, SlashCommandParser};
 use crate::store::SessionStore;
 use crate::tool_bridge::ToolBridge;
 use crate::usage::{RequestUsage, UsageTracker};
@@ -43,6 +44,8 @@ struct AppState {
     store: Arc<SessionStore>,
     context_manager: ContextManager,
     usage_tracker: UsageTracker,
+    command_registry: Arc<CommandRegistry>,
+    command_parser: Arc<SlashCommandParser>,
     max_turns: u32,
     yolo: bool,
 }
@@ -120,6 +123,8 @@ pub async fn run_server(args: Args) -> AgentResult<()> {
         store: Arc::new(store),
         context_manager: ContextManager::new(),
         usage_tracker: UsageTracker::new(),
+        command_registry: Arc::new(CommandRegistry::new()),
+        command_parser: Arc::new(SlashCommandParser::new()),
         max_turns: args.max_turns,
         yolo: args.yolo,
     };
@@ -407,6 +412,73 @@ fn get_provider_url(provider_id: &str) -> &'static str {
         .unwrap_or("https://api.groq.com/openai/v1")
 }
 
+async fn handle_local_command(
+    cmd: &str,
+    state: &AppState,
+    tx: &mpsc::Sender<ServerMessage>,
+    session_id: &str,
+) -> bool {
+    match cmd {
+        "help" => {
+            let commands = state.command_registry.all_commands();
+            let help_data: Vec<_> = commands
+                .iter()
+                .map(|c| serde_json::json!({
+                    "name": c.name,
+                    "description": c.description
+                }))
+                .collect();
+            let _ = tx.send(ServerMessage::new("help", serde_json::json!({
+                "commands": help_data
+            }))).await;
+            true
+        }
+        "clear" => {
+            let _ = tx.send(ServerMessage::new("clear", serde_json::json!({
+                "session_id": session_id
+            }))).await;
+            true
+        }
+        "history" => {
+            if let Ok(sessions) = state.store.list_sessions(20) {
+                let _ = tx.send(ServerMessage::new("history", serde_json::json!({
+                    "sessions": sessions
+                }))).await;
+            }
+            true
+        }
+        "usage" => {
+            if let Some(usage) = state.usage_tracker.get_session_summary(session_id) {
+                let _ = tx.send(ServerMessage::new("usage_info", serde_json::json!({
+                    "total_tokens": usage.total_tokens,
+                    "total_cost_usd": usage.total_cost_usd,
+                    "request_count": usage.request_count
+                }))).await;
+            } else {
+                let _ = tx.send(ServerMessage::new("usage_info", serde_json::json!({
+                    "total_tokens": 0,
+                    "total_cost_usd": 0.0,
+                    "request_count": 0
+                }))).await;
+            }
+            true
+        }
+        "yolo" => {
+            let _ = tx.send(ServerMessage::new("yolo_toggle", serde_json::json!({
+                "message": "YOLO mode toggled. Reload to apply."
+            }))).await;
+            true
+        }
+        "debug" => {
+            let _ = tx.send(ServerMessage::new("debug_toggle", serde_json::json!({
+                "message": "Debug mode toggled"
+            }))).await;
+            true
+        }
+        _ => false,
+    }
+}
+
 async fn run_agent_loop(
     state: AppState,
     user_message: String,
@@ -418,6 +490,25 @@ async fn run_agent_loop(
 ) {
     let session_id = session_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let title = user_message.chars().take(50).collect::<String>();
+
+    let parsed_cmd = state.command_parser.parse(&user_message, &state.command_registry);
+
+    if let Some(ref cmd) = parsed_cmd {
+        let _ = tx.send(ServerMessage::new("slash_command", serde_json::json!({
+            "name": cmd.name,
+            "text": cmd.text_without_command
+        }))).await;
+
+        if handle_local_command(&cmd.name, &state, &tx, &session_id).await {
+            let _ = tx.send(ServerMessage::new("done", serde_json::json!(null))).await;
+            return;
+        }
+    }
+
+    let processed_message = match parsed_cmd {
+        Some(cmd) => format!("{}{}", cmd.instruction, cmd.text_without_command),
+        None => user_message.clone(),
+    };
 
     let base_url = get_provider_url(&provider_id);
     let provider = OpenAiProvider::new(&api_key, &model_id).with_base_url(base_url);
@@ -445,7 +536,7 @@ async fn run_agent_loop(
     let checker = ApprovalChecker::new(settings);
 
     let system = system_prompt(&state.config, &state.bridge);
-    let mut messages = vec![ChatMessage::system(system), ChatMessage::user(&user_message)];
+    let mut messages = vec![ChatMessage::system(system), ChatMessage::user(&processed_message)];
 
     let session_id_clone = session_id.clone();
 
