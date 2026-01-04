@@ -118,6 +118,17 @@ impl ChatMessage {
             }]),
         }
     }
+
+    pub fn assistant_with_content(content: MessageContent) -> Self {
+        Self {
+            role: Role::Assistant,
+            content,
+        }
+    }
+
+    pub fn tool_result(tool_use_id: impl Into<String>, content: impl Into<String>) -> Self {
+        Self::tool(tool_use_id, content)
+    }
 }
 
 impl ChatRequest {
