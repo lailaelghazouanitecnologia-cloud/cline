@@ -1,7 +1,11 @@
 [package]
-name = "rust_cli"
+name = "cline"
 version = "0.1.0"
 edition = "2021"
+
+[[bin]]
+name = "cline"
+path = "main.rs"
 
 [dependencies]
 ratatui = "0.29"
@@ -11,3 +15,11 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 dotenvy = "0.15"
 syntect = { version = "5.2", default-features = false, features = ["default-fancy"] }
+
+agent-client = { path = "../agent-core/client" }
+agent-common = { path = "../agent-core/common" }
+agent-config = { path = "../agent-core/config" }
+agent-tools = { path = "../agent-core/tools" }
+
+tokio = { version = "1", features = ["full"] }
+futures = "0.3"

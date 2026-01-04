@@ -1,7 +1,12 @@
 # Rust
 /target
 agent-core/target
+cli/target
 Cargo.lock
+
+# Web
+web/node_modules
+web/dist
 
 # Legacy project
 legacy/node_modules
