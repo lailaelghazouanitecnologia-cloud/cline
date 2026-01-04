@@ -8,6 +8,7 @@ mod repl;
 mod server;
 mod slash_commands;
 mod store;
+mod terminal_ui;
 mod tool_bridge;
 mod usage;
 

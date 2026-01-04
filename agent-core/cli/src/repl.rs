@@ -336,6 +336,54 @@ impl Repl {
         }
     }
 
+    pub fn readline_multiline(&mut self) -> AgentResult<String> {
+        let mut lines = Vec::new();
+        let mut first_line = true;
+
+        loop {
+            let prompt = if first_line {
+                self.mode.color_prompt()
+            } else {
+                "\x1b[2m...\x1b[0m ".to_string()
+            };
+
+            match self.editor.readline(&prompt) {
+                Ok(line) => {
+                    if line.ends_with('\\') {
+                        lines.push(line[..line.len() - 1].to_string());
+                        first_line = false;
+                    } else if line.is_empty() && !lines.is_empty() {
+                        break;
+                    } else {
+                        lines.push(line);
+                        if first_line {
+                            break;
+                        }
+                    }
+                }
+                Err(ReadlineError::Interrupted) => {
+                    if lines.is_empty() {
+                        return Err(AgentError::api("Interrupted"));
+                    }
+                    break;
+                }
+                Err(ReadlineError::Eof) => {
+                    if lines.is_empty() {
+                        return Err(AgentError::api("EOF"));
+                    }
+                    break;
+                }
+                Err(e) => return Err(AgentError::api(format!("Readline error: {}", e))),
+            }
+        }
+
+        let result = lines.join("\n");
+        if !result.is_empty() {
+            let _ = self.editor.add_history_entry(&result);
+        }
+        Ok(result)
+    }
+
     pub fn save_history(&mut self) {
         let history_path = dirs::data_local_dir()
             .map(|p| p.join("cline-agent").join("history.txt"));
