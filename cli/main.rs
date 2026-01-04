@@ -5,7 +5,7 @@ use crossterm::{
 };
 use ratatui::{
     prelude::*,
-    widgets::{Block, Borders, Paragraph, Wrap, Scrollbar, ScrollbarOrientation, ScrollbarState},
+    widgets::{Paragraph, Wrap, Scrollbar, ScrollbarOrientation, ScrollbarState},
 };
 use serde::{Deserialize, Serialize};
 use std::io::{stdout, BufRead, BufReader, Result};
@@ -15,10 +15,12 @@ use std::time::{Duration, Instant};
 
 use dotenvy::dotenv;
 
+mod agent;
 mod config;
 mod render;
 mod theme;
 
+use agent::{AgentBridge, get_model, get_system_prompt};
 use config::Config;
 
 // ========== Groq API Types ==========
@@ -197,19 +199,20 @@ fn call_groq_api_streaming(api_key: &str, conversation: Vec<GroqMessage>, tx: Se
 // ========== App State ==========
 struct App {
     messages: Vec<ChatMessage>,
-    conversation: Vec<GroqMessage>,
+    conversation: Vec<(String, String)>,
     input: TextInput,
     is_working: bool,
     work_start: Option<Instant>,
     spinner_frame: usize,
     should_quit: bool,
     api_key: String,
+    model: String,
+    agent_bridge: Option<AgentBridge>,
     stream_rx: Option<Receiver<StreamMessage>>,
     current_response: String,
     scroll_offset: u16,
     total_lines: u16,
     auto_scroll: bool,
-    // Terminal size tracking
     term_width: u16,
     term_height: u16,
 }
@@ -217,25 +220,26 @@ struct App {
 impl App {
     fn new() -> Self {
         let api_key = std::env::var("GROQ_API_KEY").unwrap_or_default();
-        
-        let initial_message = if api_key.is_empty() {
-            "⚠️ GROQ_API_KEY not set! Set it with: set GROQ_API_KEY=your_key".to_string()
+        let model = get_model();
+
+        let (initial_message, agent_bridge) = if api_key.is_empty() {
+            ("⚠️ GROQ_API_KEY not set! Set it with: export GROQ_API_KEY=your_key".to_string(), None)
         } else {
-            "Hello! I'm connected to Groq. How can I help you?".to_string()
+            let bridge = AgentBridge::new(&api_key, &model);
+            (format!("Connected to {} via agent-core. How can I help?", model), Some(bridge))
         };
-        
+
         Self {
             messages: vec![ChatMessage::new(&initial_message, false)],
-            conversation: vec![GroqMessage {
-                role: "system".to_string(),
-                content: "You are a helpful assistant. Be concise and clear.".to_string(),
-            }],
+            conversation: vec![("system".to_string(), get_system_prompt())],
             input: TextInput::new(),
             is_working: false,
             work_start: None,
             spinner_frame: 0,
             should_quit: false,
             api_key,
+            model,
+            agent_bridge,
             stream_rx: None,
             current_response: String::new(),
             scroll_offset: 0,
@@ -301,10 +305,7 @@ impl App {
                     self.stream_rx = None;
                     if !self.current_response.is_empty() {
                         self.messages.push(ChatMessage::new(&self.current_response, false));
-                        self.conversation.push(GroqMessage {
-                            role: "assistant".to_string(),
-                            content: self.current_response.clone(),
-                        });
+                        self.conversation.push(("assistant".to_string(), self.current_response.clone()));
                     }
                     self.current_response.clear();
                     self.messages.push(ChatMessage::new("(Interrupted)", false));
@@ -340,29 +341,28 @@ impl App {
     fn send_message(&mut self, text: String) {
         self.messages.push(ChatMessage::new(&text, true));
         self.auto_scroll = true;
-        
-        self.conversation.push(GroqMessage {
-            role: "user".to_string(),
-            content: text,
-        });
-        
-        if self.api_key.is_empty() {
+
+        self.conversation.push(("user".to_string(), text.clone()));
+
+        let Some(ref bridge) = self.agent_bridge else {
             self.messages.push(ChatMessage::new("Error: GROQ_API_KEY not set", false));
             return;
-        }
-        
+        };
+
         self.is_working = true;
         self.work_start = Some(Instant::now());
         self.current_response.clear();
-        
+
         let (tx, rx): (Sender<StreamMessage>, Receiver<StreamMessage>) = mpsc::channel();
         self.stream_rx = Some(rx);
-        
+
         let api_key = self.api_key.clone();
+        let model = self.model.clone();
         let conversation = self.conversation.clone();
-        
+
         thread::spawn(move || {
-            call_groq_api_streaming(&api_key, conversation, tx);
+            let bridge = AgentBridge::new(&api_key, &model);
+            bridge.call_streaming_sync(conversation, tx);
         });
     }
 
@@ -379,10 +379,7 @@ impl App {
                     Ok(StreamMessage::Done) => {
                         if !self.current_response.is_empty() {
                             self.messages.push(ChatMessage::new(&self.current_response, false));
-                            self.conversation.push(GroqMessage {
-                                role: "assistant".to_string(),
-                                content: self.current_response.clone(),
-                            });
+                            self.conversation.push(("assistant".to_string(), self.current_response.clone()));
                         }
                         self.current_response.clear();
                         self.is_working = false;
