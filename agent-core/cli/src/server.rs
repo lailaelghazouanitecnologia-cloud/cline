@@ -282,14 +282,14 @@ async fn run_agent_loop(
     };
     let checker = ApprovalChecker::new(settings);
 
-    let system = system_prompt(&state.config);
+    let system = system_prompt(&state.config, &state.bridge);
     let mut messages = vec![
         ChatMessage::system(system),
         ChatMessage::user(&user_message),
     ];
 
     for _turn in 1..=state.max_turns {
-        let tools = crate::agent_runner::get_tool_definitions();
+        let tools = state.bridge.tool_definitions();
         let request = ChatRequest {
             messages: messages.clone(),
             tools: Some(tools),
@@ -396,13 +396,21 @@ async fn run_agent_loop(
     let _ = tx.send(ServerMessage::new("done", serde_json::json!(null))).await;
 }
 
-fn system_prompt(config: &Config) -> String {
+fn system_prompt(config: &Config, bridge: &ToolBridge) -> String {
+    let tools_list = bridge
+        .tool_definitions()
+        .iter()
+        .map(|t| format!("- {}: {}", t.name, t.description))
+        .collect::<Vec<_>>()
+        .join("\n");
+
     format!(
-        "You are an AI coding assistant.\n\nWorking directory: {}\n\n\
-        Available tools: read_file, write_file, replace_in_file, execute_command, \
-        list_files, search_files\n\n\
-        Always explain your actions.",
-        config.working_directory.display()
+        "You are an AI coding assistant.\n\n\
+         Working directory: {}\n\n\
+         Available tools:\n{}\n\n\
+         Always explain your actions.",
+        config.working_directory.display(),
+        tools_list
     )
 }
 

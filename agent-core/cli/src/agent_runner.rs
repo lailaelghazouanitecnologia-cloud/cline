@@ -4,7 +4,7 @@ use crate::cli::Args;
 use crate::repl::Repl;
 use crate::tool_bridge::ToolBridge;
 use agent_client::providers::OpenAiProvider;
-use agent_client::{ChatMessage, ChatRequest, ContentPart, MessageContent, ModelProvider, ToolDefinition};
+use agent_client::{ChatMessage, ChatRequest, ContentPart, MessageContent, ModelProvider};
 use agent_common::{AgentError, AgentResult};
 use agent_config::Config;
 use colored::Colorize;
@@ -12,6 +12,7 @@ use std::sync::Arc;
 
 pub struct AgentRunner {
     provider: OpenAiProvider,
+    bridge: Arc<ToolBridge>,
     config: Config,
     args: Args,
 }
@@ -28,7 +29,9 @@ impl AgentRunner {
         let provider = OpenAiProvider::new(&api_key, config.model_id()?)
             .with_base_url(&provider_config.base_url);
 
-        Ok(Self { provider, config, args })
+        let bridge = Arc::new(ToolBridge::new(config.clone()));
+
+        Ok(Self { provider, bridge, config, args })
     }
 
     pub async fn run(&self) -> AgentResult<()> {
@@ -43,8 +46,6 @@ impl AgentRunner {
         println!("Starting task: {}", task);
         println!("Provider: {} | Model: {}", self.args.provider, self.config.model_id()?);
         println!("---");
-
-        let bridge = Arc::new(ToolBridge::new(self.config.clone()));
 
         let mut messages = vec![self.system_message()];
         messages.push(ChatMessage::user(task));
@@ -88,15 +89,11 @@ impl AgentRunner {
             for (id, name, input) in &tool_calls {
                 println!("{} {}", "→".green(), name.yellow());
 
-                let result = bridge.execute_tool(name, input.clone()).await;
+                let result = self.bridge.execute_tool(name, input.clone()).await;
 
                 let (output, is_error) = match result {
                     Ok(out) => {
-                        let preview = if out.len() > 100 {
-                            format!("{}...", &out[..100])
-                        } else {
-                            out.clone()
-                        };
+                        let preview = truncate_output(&out, 100);
                         println!("{} {} {}", "✓".green(), name, preview.dimmed());
                         (out, false)
                     }
@@ -126,7 +123,6 @@ impl AgentRunner {
         println!("Type 'exit' or 'quit' to exit\n");
 
         let mut repl = Repl::new()?;
-        let bridge = Arc::new(ToolBridge::new(self.config.clone()));
 
         loop {
             let input = match repl.readline() {
@@ -146,13 +142,9 @@ impl AgentRunner {
             let mut messages = vec![self.system_message()];
             messages.push(ChatMessage::user(trimmed));
 
-            match self.process_conversation(&bridge, &mut messages).await {
-                Ok(response) => {
-                    println!("\n{}\n", response);
-                }
-                Err(e) => {
-                    eprintln!("Error: {}\n", e);
-                }
+            match self.process_conversation(&mut messages).await {
+                Ok(response) => println!("\n{}\n", response),
+                Err(e) => eprintln!("Error: {}\n", e),
             }
         }
 
@@ -160,16 +152,11 @@ impl AgentRunner {
         Ok(())
     }
 
-    async fn process_conversation(
-        &self,
-        bridge: &ToolBridge,
-        messages: &mut Vec<ChatMessage>,
-    ) -> AgentResult<String> {
+    async fn process_conversation(&self, messages: &mut Vec<ChatMessage>) -> AgentResult<String> {
         let max_turns = self.args.max_turns;
 
         for turn in 1..=max_turns {
             let response = self.call_llm(messages).await?;
-
             let tool_calls = extract_tool_calls(&response.content);
 
             if tool_calls.is_empty() {
@@ -186,8 +173,7 @@ impl AgentRunner {
             for (id, name, input) in &tool_calls {
                 println!("{} {}", "→".green(), name.yellow());
 
-                let result = bridge.execute_tool(name, input.clone()).await;
-
+                let result = self.bridge.execute_tool(name, input.clone()).await;
                 let output = match result {
                     Ok(out) => out,
                     Err(e) => format!("Error: {}", e),
@@ -201,7 +187,7 @@ impl AgentRunner {
     }
 
     async fn call_llm(&self, messages: &[ChatMessage]) -> AgentResult<agent_client::ChatResponse> {
-        let tools = get_tool_definitions();
+        let tools = self.bridge.tool_definitions();
 
         let request = ChatRequest {
             messages: messages.to_vec(),
@@ -215,21 +201,20 @@ impl AgentRunner {
     }
 
     fn system_message(&self) -> ChatMessage {
+        let tools_list = self.bridge
+            .tool_definitions()
+            .iter()
+            .map(|t| format!("- {}: {}", t.name, t.description))
+            .collect::<Vec<_>>()
+            .join("\n");
+
         let prompt = format!(
-            r#"You are an AI coding assistant. You help users with programming tasks.
-
-Working directory: {}
-
-Available tools:
-- read_file: Read file contents
-- write_file: Write content to a file
-- replace_in_file: Replace text in a file
-- execute_command: Run shell commands
-- list_files: List directory contents
-- search_files: Search for patterns in files
-
-Always explain your actions. When you have enough information, provide your answer WITHOUT calling more tools."#,
-            self.config.working_directory.display()
+            "You are an AI coding assistant.\n\n\
+             Working directory: {}\n\n\
+             Available tools:\n{}\n\n\
+             Always explain your actions. When you have enough information, provide your answer WITHOUT calling more tools.",
+            self.config.working_directory.display(),
+            tools_list
         );
 
         ChatMessage::system(prompt)
@@ -254,106 +239,25 @@ fn extract_tool_calls(content: &MessageContent) -> Vec<(String, String, serde_js
         .unwrap_or_default()
 }
 
-pub fn get_tool_definitions() -> Vec<ToolDefinition> {
-    vec![
-        ToolDefinition {
-            name: "read_file".to_string(),
-            description: "Read the contents of a file".to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "The path to the file to read"
-                    }
-                },
-                "required": ["path"]
-            }),
-        },
-        ToolDefinition {
-            name: "write_file".to_string(),
-            description: "Write content to a file".to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "The path to the file to write"
-                    },
-                    "content": {
-                        "type": "string",
-                        "description": "The content to write to the file"
-                    }
-                },
-                "required": ["path", "content"]
-            }),
-        },
-        ToolDefinition {
-            name: "execute_command".to_string(),
-            description: "Execute a shell command".to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "command": {
-                        "type": "string",
-                        "description": "The command to execute"
-                    }
-                },
-                "required": ["command"]
-            }),
-        },
-        ToolDefinition {
-            name: "list_files".to_string(),
-            description: "List files in a directory".to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "The directory path to list"
-                    },
-                    "recursive": {
-                        "type": "boolean",
-                        "description": "Whether to list recursively"
-                    }
-                },
-                "required": ["path"]
-            }),
-        },
-        ToolDefinition {
-            name: "search_files".to_string(),
-            description: "Search for a pattern in files".to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "The directory to search in"
-                    },
-                    "pattern": {
-                        "type": "string",
-                        "description": "The regex pattern to search for"
-                    },
-                    "file_pattern": {
-                        "type": "string",
-                        "description": "Optional file glob pattern"
-                    }
-                },
-                "required": ["path", "pattern"]
-            }),
-        },
-    ]
+fn truncate_output(output: &str, max_len: usize) -> String {
+    if output.len() > max_len {
+        format!("{}...", &output[..max_len])
+    } else {
+        output.to_string()
+    }
+}
+
+pub fn get_tool_definitions() -> Vec<agent_client::ToolDefinition> {
+    let bridge = ToolBridge::new(Config::default());
+    bridge.tool_definitions()
 }
 
 fn build_config(args: &Args) -> Config {
     let mut config = Config::default();
-
     config.provider_id = args.provider.clone();
     config.working_directory = args.working_directory();
-
     if let Some(ref model) = args.model {
         config.model_id = Some(model.clone());
     }
-
     config
 }

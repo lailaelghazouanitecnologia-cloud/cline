@@ -58,6 +58,14 @@ impl ToolSpec {
 
         self
     }
+
+    pub fn to_json_schema(&self) -> Value {
+        serde_json::json!({
+            "type": self.parameters.param_type,
+            "properties": self.parameters.properties,
+            "required": self.parameters.required
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
