@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { ArrowUp, Terminal, Zap } from 'lucide-react';
+import { ArrowUp, Terminal, Zap, BookOpen } from 'lucide-react';
 import type { Session, Message, ToolCall } from '../types';
 
 interface ChatAreaProps {
@@ -59,6 +59,13 @@ export function ChatArea({ session, isLoading, onSendMessage }: ChatAreaProps) {
     }
   }, [session?.messages]);
 
+  useEffect(() => {
+    if (inputRef.current) {
+      inputRef.current.style.height = 'auto';
+      inputRef.current.style.height = Math.min(inputRef.current.scrollHeight, 200) + 'px';
+    }
+  }, [input]);
+
   const handleSubmit = () => {
     const trimmed = input.trim();
     if (!trimmed || isLoading) return;
@@ -76,12 +83,64 @@ export function ChatArea({ session, isLoading, onSendMessage }: ChatAreaProps) {
   if (!session) {
     return (
       <main className="main-area">
-        <div className="main-content-dots" />
-        <div className="main-content-gradient" />
-        <div className="empty-state">
-          <Zap size={48} style={{ opacity: 0.3 }} />
-          <h2>Start a new task</h2>
-          <p>Type a task in the sidebar to begin</p>
+        <div className="main-container">
+          <div className="main-gradient" />
+          <div className="empty-state">
+            <Zap size={48} style={{ opacity: 0.3 }} />
+            <h2>Start a new task</h2>
+            <p>Type a task in the sidebar to begin</p>
+          </div>
+          <div className="input-wrapper">
+            <div className="input-area">
+              <div className="input-inner">
+                <textarea
+                  ref={inputRef}
+                  className="task-input"
+                  placeholder="Ask anything..."
+                  value={input}
+                  onChange={e => setInput(e.target.value)}
+                  onKeyDown={handleKeyDown}
+                  rows={1}
+                />
+                <button
+                  className="send-btn"
+                  onClick={handleSubmit}
+                  disabled={!input.trim() || isLoading}
+                >
+                  <ArrowUp size={20} />
+                </button>
+              </div>
+              <div className="input-footer">
+                <div className="input-footer-left">
+                  <button className="input-footer-btn" type="button">
+                    <BookOpen size={16} />
+                    <span>Deep Thinking</span>
+                  </button>
+                </div>
+                <span className="input-footer-text">Press Enter to send</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </main>
+    );
+  }
+
+  return (
+    <main className="main-area">
+      <div className="main-container">
+        <div className="main-gradient" />
+        <div className="chat-container" ref={chatRef}>
+          <div className="chat-messages">
+            {session.messages.map(msg => (
+              <MessageBubble key={msg.id} message={msg} />
+            ))}
+            {isLoading && (
+              <div className="message assistant" style={{ opacity: 0.6 }}>
+                Thinking...
+              </div>
+            )}
+          </div>
         </div>
         <div className="input-wrapper">
           <div className="input-area">
@@ -104,50 +163,14 @@ export function ChatArea({ session, isLoading, onSendMessage }: ChatAreaProps) {
               </button>
             </div>
             <div className="input-footer">
+              <div className="input-footer-left">
+                <button className="input-footer-btn" type="button">
+                  <BookOpen size={16} />
+                  <span>Deep Thinking</span>
+                </button>
+              </div>
               <span className="input-footer-text">Press Enter to send</span>
             </div>
-          </div>
-        </div>
-      </main>
-    );
-  }
-
-  return (
-    <main className="main-area">
-      <div className="chat-container" ref={chatRef}>
-        <div className="chat-messages">
-          {session.messages.map(msg => (
-            <MessageBubble key={msg.id} message={msg} />
-          ))}
-          {isLoading && (
-            <div className="message assistant" style={{ opacity: 0.6 }}>
-              Thinking...
-            </div>
-          )}
-        </div>
-      </div>
-      <div className="input-wrapper">
-        <div className="input-area">
-          <div className="input-inner">
-            <textarea
-              ref={inputRef}
-              className="task-input"
-              placeholder="Ask anything..."
-              value={input}
-              onChange={e => setInput(e.target.value)}
-              onKeyDown={handleKeyDown}
-              rows={1}
-            />
-            <button
-              className="send-btn"
-              onClick={handleSubmit}
-              disabled={!input.trim() || isLoading}
-            >
-              <ArrowUp size={20} />
-            </button>
-          </div>
-          <div className="input-footer">
-            <span className="input-footer-text">Press Enter to send</span>
           </div>
         </div>
       </div>
