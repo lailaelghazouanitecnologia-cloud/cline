@@ -22,6 +22,12 @@ pub struct Args {
     #[arg(long, default_value = "false")]
     pub yolo: bool,
 
+    #[arg(long, default_value = "false")]
+    pub auto_edit: bool,
+
+    #[arg(long, default_value = "false")]
+    pub sandbox: bool,
+
     #[arg(long, default_value = "50")]
     pub max_turns: u32,
 

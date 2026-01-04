@@ -366,6 +366,147 @@ impl Default for SafeExecutor {
     }
 }
 
+pub struct DockerSandbox {
+    image: String,
+    working_dir: PathBuf,
+    mount_paths: Vec<(PathBuf, PathBuf)>,
+    network_mode: NetworkMode,
+    allowed_hosts: Vec<String>,
+    env_vars: HashMap<String, String>,
+    timeout_secs: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NetworkMode {
+    None,
+    Host,
+    AllowList,
+}
+
+impl DockerSandbox {
+    pub fn new(working_dir: impl Into<PathBuf>) -> Self {
+        Self {
+            image: "ubuntu:22.04".to_string(),
+            working_dir: working_dir.into(),
+            mount_paths: Vec::new(),
+            network_mode: NetworkMode::None,
+            allowed_hosts: Vec::new(),
+            env_vars: HashMap::new(),
+            timeout_secs: 300,
+        }
+    }
+
+    pub fn with_image(mut self, image: impl Into<String>) -> Self {
+        self.image = image.into();
+        self
+    }
+
+    pub fn with_network(mut self, mode: NetworkMode) -> Self {
+        self.network_mode = mode;
+        self
+    }
+
+    pub fn allow_host(mut self, host: impl Into<String>) -> Self {
+        self.allowed_hosts.push(host.into());
+        self
+    }
+
+    pub fn mount(mut self, host_path: impl Into<PathBuf>, container_path: impl Into<PathBuf>) -> Self {
+        self.mount_paths.push((host_path.into(), container_path.into()));
+        self
+    }
+
+    pub fn env(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.env_vars.insert(key.into(), value.into());
+        self
+    }
+
+    pub fn timeout(mut self, secs: u64) -> Self {
+        self.timeout_secs = secs;
+        self
+    }
+
+    fn build_docker_args(&self, command: &str) -> Vec<String> {
+        let mut args = vec![
+            "run".to_string(),
+            "--rm".to_string(),
+            "--init".to_string(),
+        ];
+
+        match self.network_mode {
+            NetworkMode::None => args.push("--network=none".to_string()),
+            NetworkMode::Host => args.push("--network=host".to_string()),
+            NetworkMode::AllowList => {}
+        }
+
+        args.push("--memory=512m".to_string());
+        args.push("--cpus=1".to_string());
+        args.push("--pids-limit=256".to_string());
+        args.push("--read-only".to_string());
+        args.push("--tmpfs=/tmp:rw,noexec,nosuid,size=64m".to_string());
+
+        let workdir_str = self.working_dir.to_string_lossy();
+        args.push(format!("-v={}:/workspace:rw", workdir_str));
+        args.push("-w=/workspace".to_string());
+
+        for (host, container) in &self.mount_paths {
+            args.push(format!("-v={}:{}:ro", host.to_string_lossy(), container.to_string_lossy()));
+        }
+
+        for (key, value) in &self.env_vars {
+            args.push(format!("-e={}={}", key, value));
+        }
+
+        args.push(format!("--stop-timeout={}", self.timeout_secs));
+        args.push(self.image.clone());
+        args.push("/bin/sh".to_string());
+        args.push("-c".to_string());
+        args.push(command.to_string());
+
+        args
+    }
+
+    pub async fn execute(&self, command: &str) -> AgentResult<CommandResult> {
+        let start = std::time::Instant::now();
+        let docker_args = self.build_docker_args(command);
+
+        let mut cmd = Command::new("docker");
+        cmd.args(&docker_args)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        let output = cmd.output().await
+            .map_err(|e| AgentError::io("docker execute", e))?;
+
+        let duration_ms = start.elapsed().as_millis() as u64;
+
+        Ok(CommandResult {
+            exit_code: output.status.code().unwrap_or(-1),
+            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+            truncated: false,
+            duration_ms,
+        })
+    }
+
+    pub async fn is_available() -> bool {
+        Command::new("docker")
+            .arg("info")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
+}
+
+impl Default for DockerSandbox {
+    fn default() -> Self {
+        Self::new(std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
+    }
+}
+
 pub struct BatchExecutor {
     executor: SafeExecutor,
     results: Vec<CommandResult>,
