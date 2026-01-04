@@ -9,9 +9,15 @@ use crate::provider::{ChatStreamBox, ModelProvider};
 use crate::stream::{DeltaType, StreamDelta, StreamEvent, StreamEventType};
 use agent_common::{AgentError, AgentResult};
 use async_trait::async_trait;
+use bytes::Bytes;
 use futures::stream::StreamExt;
+use futures::Stream;
+use pin_project_lite::pin_project;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
+use std::pin::Pin;
+use std::task::{Context, Poll};
 
 pub struct OpenAiProvider {
     client: Client,
@@ -165,13 +171,7 @@ impl ModelProvider for OpenAiProvider {
         }
 
         let byte_stream = response.bytes_stream();
-        let event_stream = byte_stream
-            .map(|result| {
-                result
-                    .map_err(|e| AgentError::provider(format!("stream error: {}", e)))
-                    .and_then(|bytes| parse_sse_chunk(&bytes))
-            })
-            .filter_map(|result| async move { result.transpose() });
+        let event_stream = SseParser::new(byte_stream);
 
         Ok(Box::pin(event_stream))
     }
@@ -189,47 +189,148 @@ impl ModelProvider for OpenAiProvider {
     }
 }
 
-fn parse_sse_chunk(bytes: &[u8]) -> AgentResult<Option<StreamEvent>> {
-    let text = String::from_utf8_lossy(bytes);
+pin_project! {
+    pub struct SseParser<S> {
+        #[pin]
+        inner: S,
+        buffer: String,
+        pending: VecDeque<StreamEvent>,
+    }
+}
 
-    for line in text.lines() {
-        if let Some(data) = line.strip_prefix("data: ") {
-            if data.trim() == "[DONE]" {
-                return Ok(Some(StreamEvent {
-                    event_type: StreamEventType::MessageEnd,
-                }));
-            }
+impl<S> SseParser<S>
+where
+    S: Stream<Item = Result<Bytes, reqwest::Error>>,
+{
+    pub fn new(inner: S) -> Self {
+        Self {
+            inner,
+            buffer: String::new(),
+            pending: VecDeque::new(),
+        }
+    }
 
-            let chunk: OpenAiStreamChunk = serde_json::from_str(data)
-                .map_err(|e| AgentError::provider(format!("failed to parse chunk: {}", e)))?;
+    fn process_buffer(&mut self) {
+        while let Some(pos) = self.buffer.find("\n\n") {
+            let event_data = self.buffer[..pos].to_string();
+            self.buffer = self.buffer[pos + 2..].to_string();
 
-            if let Some(choice) = chunk.choices.into_iter().next() {
-                if let Some(delta) = choice.delta {
-                    if let Some(content) = delta.content {
-                        return Ok(Some(StreamEvent {
-                            event_type: StreamEventType::ContentBlockDelta {
-                                delta: StreamDelta {
-                                    delta_type: DeltaType::TextDelta { text: content },
-                                    index: choice.index,
-                                },
-                            },
-                        }));
+            for line in event_data.lines() {
+                if let Some(data) = line.strip_prefix("data: ") {
+                    if let Some(event) = parse_sse_data(data) {
+                        self.pending.push_back(event);
                     }
                 }
+            }
+        }
 
-                if let Some(finish_reason) = choice.finish_reason {
-                    return Ok(Some(StreamEvent {
-                        event_type: StreamEventType::MessageDelta {
-                            finish_reason: parse_finish_reason(&finish_reason),
-                            usage: Usage::default(),
-                        },
-                    }));
+        while let Some(pos) = self.buffer.find('\n') {
+            let line = self.buffer[..pos].to_string();
+            self.buffer = self.buffer[pos + 1..].to_string();
+
+            if let Some(data) = line.strip_prefix("data: ") {
+                if let Some(event) = parse_sse_data(data) {
+                    self.pending.push_back(event);
                 }
             }
         }
     }
+}
 
-    Ok(None)
+impl<S> Stream for SseParser<S>
+where
+    S: Stream<Item = Result<Bytes, reqwest::Error>>,
+{
+    type Item = AgentResult<StreamEvent>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let mut this = self.project();
+
+        if let Some(event) = this.pending.pop_front() {
+            return Poll::Ready(Some(Ok(event)));
+        }
+
+        match this.inner.as_mut().poll_next(cx) {
+            Poll::Ready(Some(Ok(bytes))) => {
+                let text = String::from_utf8_lossy(&bytes);
+                this.buffer.push_str(&text);
+
+                while let Some(pos) = this.buffer.find('\n') {
+                    let line = this.buffer[..pos].to_string();
+                    *this.buffer = this.buffer[pos + 1..].to_string();
+
+                    if let Some(data) = line.strip_prefix("data: ") {
+                        if let Some(event) = parse_sse_data(data) {
+                            this.pending.push_back(event);
+                        }
+                    }
+                }
+
+                if let Some(event) = this.pending.pop_front() {
+                    Poll::Ready(Some(Ok(event)))
+                } else {
+                    cx.waker().wake_by_ref();
+                    Poll::Pending
+                }
+            }
+            Poll::Ready(Some(Err(e))) => {
+                Poll::Ready(Some(Err(AgentError::provider(format!("stream error: {}", e)))))
+            }
+            Poll::Ready(None) => {
+                if let Some(event) = this.pending.pop_front() {
+                    Poll::Ready(Some(Ok(event)))
+                } else {
+                    Poll::Ready(None)
+                }
+            }
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
+fn parse_sse_data(data: &str) -> Option<StreamEvent> {
+    let data = data.trim();
+
+    if data == "[DONE]" {
+        return Some(StreamEvent {
+            event_type: StreamEventType::MessageEnd,
+        });
+    }
+
+    if data.is_empty() {
+        return None;
+    }
+
+    let chunk: OpenAiStreamChunk = match serde_json::from_str(data) {
+        Ok(c) => c,
+        Err(_) => return None,
+    };
+
+    if let Some(choice) = chunk.choices.into_iter().next() {
+        if let Some(delta) = choice.delta {
+            if let Some(content) = delta.content {
+                return Some(StreamEvent {
+                    event_type: StreamEventType::ContentBlockDelta {
+                        delta: StreamDelta {
+                            delta_type: DeltaType::TextDelta { text: content },
+                            index: choice.index,
+                        },
+                    },
+                });
+            }
+        }
+
+        if let Some(finish_reason) = choice.finish_reason {
+            return Some(StreamEvent {
+                event_type: StreamEventType::MessageDelta {
+                    finish_reason: parse_finish_reason(&finish_reason),
+                    usage: Usage::default(),
+                },
+            });
+        }
+    }
+
+    None
 }
 
 fn parse_openai_message(message: OpenAiMessage) -> MessageContent {

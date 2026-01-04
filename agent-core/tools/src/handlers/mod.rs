@@ -2,7 +2,6 @@ mod act_respond;
 mod apply_patch;
 mod ask_followup;
 mod attempt_completion;
-mod browser;
 mod condense;
 mod list_code_definitions;
 mod list_files;
@@ -25,7 +24,6 @@ pub use attempt_completion::{
     create_completion_channel, AttemptCompletionHandler, CompletionAttempt, CompletionDecision,
     CompletionFeedback,
 };
-pub use browser::BrowserHandler;
 pub use condense::{CondenseHandler, NewTaskHandler, SummarizeTaskHandler};
 pub use list_code_definitions::ListCodeDefinitionsHandler;
 pub use list_files::ListFilesHandler;
@@ -53,7 +51,6 @@ pub fn register_defaults(registry: &mut ToolRegistry) {
     registry.register(ListCodeDefinitionsHandler);
     registry.register(WebFetchHandler::new());
     registry.register(WebSearchHandler::new());
-    registry.register(BrowserHandler::new());
     registry.register(AskFollowupHandler::new());
     registry.register(AttemptCompletionHandler::new());
     registry.register(PlanModeRespondHandler::new());
